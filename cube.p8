@@ -4,17 +4,29 @@ __lua__
 
 camera={}
 objects={}
+cubeRotMat={}
 
 function _init()
-   camera = perspective2(45, 1, 0.1, 1000)
-   add(objects, object(transmatrix(vpoint(0,0,-5)), cubemesh()))
+   --camera = perspective2(45, 1, 0.1, 1000)
+   camera = perspective(-3, 3, 3, -3, 2, 100)
+   --camera = ortho(-5, 5, 5, -5, 0.1, 100)
+   cube = object(transmatrix(vpoint(0,0,5)), cubemesh())
+   add(objects, cube)
+
+   cubeRotMat= rotmatrix(0.25/30, 0.1/30, 0.05/30)
 end
 
+
+
 function _update()
+   for obj in all(objects) do
+      obj.mat = mmult(cubeRotMat, obj.mat)
+   end
 end
 
 function _draw()
    cls()
+   print("mem: "..stat(0).." fps: "..stat(7))
    --drawTriangle(point(2,3), point(8,50), point(30, 6), 12)
    --print(vstr(mapply(rotmatrix(0.25,0,0), vdir(1,0,0))))
    render3d(camera, objects)
@@ -29,6 +41,7 @@ function psub(p1, p2)   return point2d(p1[1]-p2[1], p1[2]-p2[2]) end
 function pnormsqr(p)    return p[1]*p[1] + p[2]*p[2] end
 function pscale(p,s)    return point2d(p[1]*s, p[2]*s) end
 function pdot(p1, p2)   return p1[1] * p2[1] + p1[2] * p2[2] end
+function pstr(p)        return "<"..p[1]..","..p[2]..">" end
 
 -- https://stackoverflow.com/questions/2049582/how-to-determine-if-a-point-is-in-a-2d-triangle
 function pointInTriangle(p, t1, t2, t3)
@@ -63,12 +76,15 @@ end
 
 function vpoint(x,y,z) return {x, y, z, 1} end
 function vdir(x,y,z) return {x, y, z, 0} end
-function vadd(v1, v2) return {v1[1]+v2[1], v1[2]+v2[2], v1[3]+v2[3], v1.w} end
+function vmakedir(v) return {v[1], v[2], v[3], 0} end
+function vadd(v1, v2) return {v1[1]+v2[1], v1[2]+v2[2], v1[3]+v2[3], v1[4]+v2[4]} end
 function vsub(v1, v2) return {v1[1]-v2[1], v1[2]-v2[2], v1[3]-v2[3], v1.w} end
 function vscale(v1, s) return {v1[1]*s, v1[2]*s, v1[3]*s, v1[4]*s} end
 function vdot(v1, v2) return v1[1]*v2[1] + v1[2]*v2[2] + v1[3]*v2[3] end
-function vnormalize(v) return vscale(v, sqrt(vdot(v,v))) end
-function vstr(v) return "["..v[1]..", "..v[2]..", "..v[3]..", "..v[4].."]" end
+function vnorm(v) return sqrt(vdot(v,v)) end
+function vnormalize(v) dv = vmakedir(v) return vscale(dv, 1/vnorm(dv)) end
+function vstr(v) return "["..v[1]..","..v[2]..","..v[3]..","..v[4].."]" end
+function vstr3(v) return "["..v[1]..","..v[2]..","..v[3].."]" end
 
 -------------------------------------------------------------------------------
 -- matrix
@@ -102,13 +118,13 @@ function scalematrix(sx, sy, sz, m)
    if type(m) == "nil" then
       m = matrix()
    end
-   m[1][1] *= sx
-   m[2][2] *= sy
-   m[3][3] *= sz
+   m[1][1] = sx
+   m[2][2] = sy
+   m[3][3] = sz
    m[4][4] = 1
    return m
 end
-function orth(l, r, t, b, n, f)
+function ortho(l, r, t, b, n, f)
    m = matrix()
    m[1][1] = 2 / (r - l)
    m[2][2] = 2 / (t - b)
@@ -116,7 +132,7 @@ function orth(l, r, t, b, n, f)
    m[1][4] = -(r+l) / (r-l)
    m[2][4] = -(t+b) / (t-b)
    m[3][4] = -(f+n) / (f-n)
-   m[1][4] = 1
+   m[4][4] = 1
    return m
 end
 function perspective(l, r, t, b, n, f)
@@ -180,6 +196,7 @@ end
 
 function geometryProjection(vFrag, objMat, camMat)
    camspaceVert     = mapply(camMat, mapply(objMat, vFrag.v))
+   camspaceVert     = vscale(camspaceVert, 1/camspaceVert[4]) // normalize the w component
    camspaceNormal   = vnormalize(mapply(camMat, mapply(objMat, vFrag.n)))
    return fragment(camspaceVert, vFrag.uv, camspaceNormal)
 end
@@ -194,7 +211,9 @@ function geometryScreenMapping(clippedVert, screenMat)
 end
 
 function processGeometries(cam, objects)
-   screenMat = transmatrix(vpoint(64, 64, 0.5), scalematrix(64, 64, 0.5))
+   screenMat = mmult(transmatrix(vpoint(64, 64, 0.5)), scalematrix(64, 64, 0.5))
+
+   -- todo: optimize, only process vertices and normals once
    for obj in all(objects) do
       mesh = obj.mesh
       obj.vFrags={}
@@ -207,17 +226,16 @@ function processGeometries(cam, objects)
             n = mesh.normals[t[tindex][3]]
             vFrag           = geometryVertexShading(v, uv, n)
             projVertFrag    = geometryProjection(vFrag, obj.mat, cam)
+            --print("pv: "..vstr(projVertFrag.n))
             add(processedVertData, projVertFrag)
          end
          for processedTriangle in all(processedVertData) do
             geometryClipping(processedTriangle, clippedVertData)
+            --print(processedTriangle.v[1].." -> "..clippedVertData[#clippedVertData].v[1])
          end
-         for clippedTriangle in all(clippedVertData) do
-            for tindex=1,3 do
-               clippedFrag=clippedVertData[tindex]
-               screenVert = geometryScreenMapping(clippedFrag.v, screenMat)
-               clippedFrag.v = screenVert
-            end
+         for clippedVertex in all(clippedVertData) do
+            screenVert = geometryScreenMapping(clippedVertex.v, screenMat)
+            clippedVertex.v = screenVert
          end
          add(obj.vFrags, clippedVertData) -- accumulate screen space clipped triangles
       end
@@ -233,7 +251,7 @@ function rasterize(objects)
    -- rasterTriangleTraversal
    for obj in all(objects) do
       obj.pFrags = {}
-      print(#(obj.vFrags))
+      -- print(#(obj.vFrags))
       for vfragTriangle in all(obj.vFrags) do
          p1 = vfragTriangle[1].v
          p2 = vfragTriangle[2].v
@@ -247,13 +265,15 @@ function rasterize(objects)
          edgeParams = {computeEdgeParams(p1, p2), computeEdgeParams(p2, p3), computeEdgeParams(p3, p1)}
          pmin = point2d(min(min(p1[1], p2[1]), p3[1]), min(min(p1[2], p2[2]), p3[2]))
          pmax = point2d(max(max(p1[1], p2[1]), p3[1]), max(max(p1[2], p2[2]), p3[2]))
+         --print("min: "..pstr(pmin).." max: "..pstr(pmax))
+         --print("params: a:"..edgeParams[1].a.."b: "..edgeParams[1].b.."c: "..edgeParams[1].c)
          for x=pmin[1], pmax[1] do
             for y=pmin[2], pmax[2] do
                isInside = true
                edgeValues = {}
                for e=1,3 do
-                  edgeValues[e] = edgeSign(point2d(x,y), edgeParams[e].a, edgeParams[e].b, edgeParams[e].c) >= 0
-                  isInside = isInside and edgeValues[2]
+                  edgeValues[e] = edgeSign(point2d(x,y), edgeParams[e].a, edgeParams[e].b, edgeParams[e].c)
+                  isInside = isInside and edgeValues[e] >= 0
                end
                if isInside then
                   areaSum = (edgeValues[1]  + edgeValues[2] + edgeValues[3])
@@ -262,7 +282,7 @@ function rasterize(objects)
                   barycentric_v = edgeValues[3] / areaSum
                   barycentric_w = 1 - barycentric_u - barycentric_v
                   v = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v, p1, p2, p3)
-                  v = baryInterpPoint(barycentric_w, barycentric_u, barycentric_v, uv1, uv2, uv3)
+                  uv = baryInterpPoint(barycentric_w, barycentric_u, barycentric_v, uv1, uv2, uv3)
                   n = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v, n1, n2, n3)
                   add(obj.pFrags, fragment(v, uv, n))
                end
@@ -274,6 +294,13 @@ end
 function processPixels(objects)
    --pixelShading
    for obj in all(objects) do
+      for pfrag in all(obj.pFrags) do
+         x = flr(pfrag.v[1])
+         y = flr(pfrag.v[2])
+         --print(pstr(point2d(pfrag.v[1],pfrag.v[2])))
+         --print(pstr(point2d(x,y)))
+         pset(x,y,4)
+      end
    end
    --pixelMerging
 end
@@ -283,7 +310,6 @@ function render3d(camera, objects)
    rasterize(objects)
    processPixels(objects)
 end
-
 
 function cubemesh()
    return meshdata(
