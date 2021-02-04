@@ -3,21 +3,24 @@ version 29
 __lua__
 
 camera={}
+cube={}
 objects={}
 cubeRotMat={}
+cubeMoveSpeed=0.1
 
 function _init()
    --camera = perspective2(45, 1, 0.1, 1000)
-   camera = perspective(-3, 3, 3, -3, 2, 100)
    --camera = ortho(-5, 5, 5, -5, 0.1, 100)
-   local cube = object(transmatrix(vpoint(0,0,8)), cubemesh())
+   camera = perspective(-3, 3, 3, -3, 2, 100)
+   cube = object(transmatrix(vpoint(0,0,8)), cubemesh())
    add(objects, cube)
 
    cubeRotMat= rotmatrix(0.25/30, 0.1/30, 0.05/30)
-   --cubeRotMat= rotmatrix(0,0.25/30,0)
 end
 
 function _update()
+   if (btn(⬆️)) mtranslate(cube.mat, vpoint(0,0,-cubeMoveSpeed))
+   if (btn(⬇️)) mtranslate(cube.mat, vpoint(0,0,cubeMoveSpeed))
    for obj in all(objects) do
       local translation = mgettranslation(obj.mat)
       mtranslate(obj.mat, vscale(translation, -1))
@@ -27,13 +30,11 @@ function _update()
 end
 
 function _draw()
+   srand(12345)
    cls()
+   color(7)
    print("mem:"..stat(0).." cpu:"..stat(1).." fps:"..stat(7))
-   --drawTriangle(point(2,3), point(8,50), point(30, 6), 12)
-   --print(vstr(mapply(rotmatrix(0.25,0,0), vdir(1,0,0))))
    render3d(camera, objects)
-   --mprint(objects[1].mat)
-   print(#objects[1].mat)
 end
 
 -------------------------------------------------------------------------------
@@ -216,16 +217,17 @@ function meshdata(vertices, textureCoords, normals, triangles)
 end
 function object(mat, mesh) return {mat=mat, mesh=mesh, vFrags={}, pFrags={}} end
 
-function fragment(v, uv, n) return {v=v, uv=uv, n=n} end
-function geometryVertexShading(v, uv, n)
-   return fragment(v, uv, n)
+function fragment(v, uv, n)
+   return {vx=v[1], vy=v[2], vz=v[3],
+           u=uv[1], v = uv[2],
+           nx=n[1], ny=n[2], nz=n[3]}
 end
-
-function geometryProjection(vFrag, objMat, camMat)
-   local camspaceVert   = mapply(camMat, mapply(objMat, vFrag.v))
+function geometryVertexShading(camMat, objMat, v, uv, n)
+   -- projection to camspace
+   local camspaceVert   = mapply(camMat, mapply(objMat, v))
    camspaceVert         = vscale(camspaceVert, 1/camspaceVert[4]) // normalize the w component
-   local camspaceNormal = vnormalize(mapply(camMat, mapply(objMat, vFrag.n)))
-   return fragment(camspaceVert, vFrag.uv, camspaceNormal)
+   local camspaceNormal = vnormalize(mapply(camMat, mapply(objMat, n)))
+   return fragment(camspaceVert, uv, camspaceNormal)
 end
 
 function geometryClipping(projVertFrag, clippedTriangles)
@@ -233,8 +235,14 @@ function geometryClipping(projVertFrag, clippedTriangles)
    add(clippedTriangles, projVertFrag)
 end
 
-function geometryScreenMapping(clippedVert, screenMat)
-   return mapply(screenMat, clippedVert)
+function geometryScreenMapping(vfrag, screenMat)
+   local v = vpoint(vfrag.vx, vfrag.vy, vfrag.vz)
+   local screen_v = mapply(screenMat, v)
+   --print("v: "..vstr(v))
+   --print("sv: "..vstr(screen_v))
+   vfrag.vx = screen_v[1]
+   vfrag.vy = screen_v[2]
+   vfrag.vz = screen_v[3]
 end
 
 function processGeometries(cam, objects)
@@ -245,62 +253,68 @@ function processGeometries(cam, objects)
       local mesh = obj.mesh
       obj.vFrags={}
       for t in all(mesh.tris) do
-         local processedVertData= {}
-         local clippedVertData = {}
+         local processedTriangleFrags= {}
+         local clippedTriangleFrags = {}
          for tindex=1,3 do
             local v     = mesh.verts[t[tindex][1]]
             local uv    = mesh.uvs[t[tindex][2]]
             local n     = mesh.normals[t[tindex][3]]
-            local vFrag           = geometryVertexShading(v, uv, n)
-            local projVertFrag    = geometryProjection(vFrag, obj.mat, cam)
-            --print("pv: "..vstr(projVertFrag.n))
-            add(processedVertData, projVertFrag)
+            local vFrag = geometryVertexShading(cam, obj.mat, v, uv, n)
+            --print("pv: "..vstr(vFrag.n))
+            add(processedTriangleFrags, vFrag)
          end
-         for processedTriangle in all(processedVertData) do
-            geometryClipping(processedTriangle, clippedVertData)
-            --print(processedTriangle.v[1].." -> "..clippedVertData[#clippedVertData].v[1])
+         for processedTriangle in all(processedTriangleFrags) do
+            geometryClipping(processedTriangle, clippedTriangleFrags)
+            --print(processedTriangle.v[1].." -> "..clippedTriangleFrags[#clippedTriangleFrags].v[1])
          end
-         for clippedVertex in all(clippedVertData) do
-            local screenVert = geometryScreenMapping(clippedVertex.v, screenMat)
-            clippedVertex.v = screenVert
+         for clippedVertexFrag in all(clippedTriangleFrags) do
+            geometryScreenMapping(clippedVertexFrag, screenMat)
+            --print("frag: "..clippedVertexFrag.vx)
          end
-         add(obj.vFrags, clippedVertData) -- accumulate screen space clipped triangles
+         add(obj.vFrags, clippedTriangleFrags) -- accumulate screen space clipped triangles
       end
    end
 end
 
 function rasterize(objects)
    function computeEdgeParams(p1, p2) return {a=-(p2[2]-p1[2]), b=(p2[1]-p1[1]), c=(p2[2]-p1[2])*p1[1] - (p2[1]-p1[1])*p1[2]} end
-   function edgeSign(p,a,b,c) return a*p[1] + b*p[2] + c end
+   function edgeSign(px,py,a,b,c) return a*px + b*py + c end
    function baryInterpVertex(w,u,v,v1,v2,v3) return vadd(vadd(vscale(v1, w), vscale(v2, u)), vscale(v3, v)) end
    function baryInterpPoint(w,u,v,v1,v2,v3) return padd(padd(pscale(v1, w), pscale(v2, u)), pscale(v3, v)) end
    -- rasterTrianglesetup
    -- rasterTriangleTraversal
+   local triCount = 0
+   local triPfragAvgData = {}
    for obj in all(objects) do
       obj.pFrags = {}
-      print(#(obj.vFrags))
       for vfragTriangle in all(obj.vFrags) do
-         local p1 = vfragTriangle[1].v
-         local p2 = vfragTriangle[2].v
-         local p3 = vfragTriangle[3].v
-         local uv1 = vfragTriangle[1].uv
-         local uv2 = vfragTriangle[2].uv
-         local uv3 = vfragTriangle[3].uv
-         local n1 = vfragTriangle[1].n
-         local n2 = vfragTriangle[2].n
-         local n3 = vfragTriangle[3].n
+         triCount += 1
+         local tricol = rnd(16)
+         local p1 = vpoint(vfragTriangle[1].vx, vfragTriangle[1].vy, vfragTriangle[1].vz)
+         local p2 = vpoint(vfragTriangle[2].vx, vfragTriangle[2].vy, vfragTriangle[2].vz)
+         local p3 = vpoint(vfragTriangle[3].vx, vfragTriangle[3].vy, vfragTriangle[3].vz)
+         local uv1 = point2d(vfragTriangle[1].u, vfragTriangle[1].v)
+         local uv2 = point2d(vfragTriangle[2].u, vfragTriangle[2].v)
+         local uv3 = point2d(vfragTriangle[3].u, vfragTriangle[3].v)
+         local n1 = vpoint(vfragTriangle[1].nx, vfragTriangle[1].ny, vfragTriangle[1].nz)
+         local n2 = vpoint(vfragTriangle[2].nx, vfragTriangle[2].ny, vfragTriangle[2].nz)
+         local n3 = vpoint(vfragTriangle[3].nx, vfragTriangle[3].ny, vfragTriangle[3].nz)
          local edgeParams = {computeEdgeParams(p1, p2), computeEdgeParams(p2, p3), computeEdgeParams(p3, p1)}
-         local pmin = point2d(min(min(p1[1], p2[1]), p3[1]), min(min(p1[2], p2[2]), p3[2]))
-         local pmax = point2d(max(max(p1[1], p2[1]), p3[1]), max(max(p1[2], p2[2]), p3[2]))
+         local pmin_x = min(min(p1[1], p2[1]), p3[1])
+         local pmin_y = min(min(p1[2], p2[2]), p3[2])
+         local pmax_x = max(max(p1[1], p2[1]), p3[1])
+         local pmax_y = max(max(p1[2], p2[2]), p3[2])
          --print("min: "..pstr(pmin).." max: "..pstr(pmax))
          --print("params: a:"..edgeParams[1].a.."b: "..edgeParams[1].b.."c: "..edgeParams[1].c)
-         for x=pmin[1], pmax[1] do
-            for y=pmin[2], pmax[2] do
+         local triPixelFragCount = 0
+         for x=pmin_x, pmax_x do
+            for y=pmin_y, pmax_y do
                local isInside = true
                local edgeValues = {}
                for e=1,3 do
-                  edgeValues[e] = edgeSign(point2d(x,y), edgeParams[e].a, edgeParams[e].b, edgeParams[e].c)
+                  edgeValues[e] = edgeSign(x,y, edgeParams[e].a, edgeParams[e].b, edgeParams[e].c)
                   isInside = isInside and edgeValues[e] >= 0
+                  if (not isInside) break
                end
                if isInside then
                   local areaSum = (edgeValues[1]  + edgeValues[2] + edgeValues[3])
@@ -311,26 +325,43 @@ function rasterize(objects)
                   local v = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v, p1, p2, p3)
                   local uv = baryInterpPoint(barycentric_w, barycentric_u, barycentric_v, uv1, uv2, uv3)
                   local n = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v, n1, n2, n3)
-                  add(obj.pFrags, fragment(v, uv, n))
+                  local pfrag = fragment(v, uv, n)
+                  pfrag.col = tricol
+                  add(obj.pFrags, pfrag)
+                  triPixelFragCount +=1
                end
             end
          end
+         add(triPfragAvgData, triPixelFragCount)
       end
    end
+   print("triangle count: "..triCount)
+   triPfragAvg = 0
+   for d in all(triPfragAvgData) do triPfragAvg += d end
+   triPfragAvg /= #triPfragAvgData
+   print("avg pfrag/tri: "..triPfragAvg)
 end
 function processPixels(objects)
    --pixelShading
+   --pixelMerging ?
+   --pixelRender
+   zbuf = {}
+   for i=1,128 do zbuf[i]={} end
+   
    for obj in all(objects) do
       print("pfrag count: "..#obj.pFrags)
       for pfrag in all(obj.pFrags) do
-         local x = flr(pfrag.v[1])
-         local y = flr(pfrag.v[2])
-         --print(pstr(point2d(pfrag.v[1],pfrag.v[2])))
-         --print(pstr(point2d(x,y)))
-         pset(x,y,4)
+         local x = flr(pfrag.vx)
+         local y = flr(pfrag.vy)
+         if (not zbuf[x][y]) or pfrag.vz < zbuf[x][y]  then
+            zbuf[x][y] = pfrag.vz
+            pset(x,y,pfrag.col)
+         end
+         -- if x==64 and y==64 then
+         --    print(pfrag.vz)
+         -- end
       end
    end
-   --pixelMerging
 end
 
 function render3d(camera, objects)
