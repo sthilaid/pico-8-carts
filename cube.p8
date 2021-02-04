@@ -10,10 +10,11 @@ function _init()
    --camera = perspective2(45, 1, 0.1, 1000)
    camera = perspective(-3, 3, 3, -3, 2, 100)
    --camera = ortho(-5, 5, 5, -5, 0.1, 100)
-   local cube = object(transmatrix(vpoint(0,0,5)), cubemesh())
+   local cube = object(transmatrix(vpoint(0,0,8)), cubemesh())
    add(objects, cube)
 
    cubeRotMat= rotmatrix(0.25/30, 0.1/30, 0.05/30)
+   --cubeRotMat= rotmatrix(0,0.25/30,0)
 end
 
 function _update()
@@ -27,10 +28,12 @@ end
 
 function _draw()
    cls()
-   print("mem: "..stat(0).." fps: "..stat(7))
+   print("mem:"..stat(0).." cpu:"..stat(1).." fps:"..stat(7))
    --drawTriangle(point(2,3), point(8,50), point(30, 6), 12)
    --print(vstr(mapply(rotmatrix(0.25,0,0), vdir(1,0,0))))
    render3d(camera, objects)
+   --mprint(objects[1].mat)
+   print(#objects[1].mat)
 end
 
 -------------------------------------------------------------------------------
@@ -84,6 +87,7 @@ function vscale(v1, s) return {v1[1]*s, v1[2]*s, v1[3]*s, v1[4]*s} end
 function vdot(v1, v2) return v1[1]*v2[1] + v1[2]*v2[2] + v1[3]*v2[3] end
 function vnorm(v) return sqrt(vdot(v,v)) end
 function vnormalize(v) local dv = vmakedir(v) return vscale(dv, 1/vnorm(dv)) end
+function vdistsqr(v1, v2) local dv = vsub(v2,v1) return vdot(dv,dv) end
 function vstr(v) return "["..v[1]..","..v[2]..","..v[3]..","..v[4].."]" end
 function vstr3(v) return "["..v[1]..","..v[2]..","..v[3].."]" end
 
@@ -91,18 +95,33 @@ function vstr3(v) return "["..v[1]..","..v[2]..","..v[3].."]" end
 -- matrix
 
 function matrix() return {{1,0,0,0}, {0,1,0,0}, {0,0,1,0}, {0,0,0,1}} end
-function rotmatrix(p, y, r) -- pitch around z, yaw around y, roll around x
-   local m = matrix()
-   m[1][1] = cos(y)*cos(p)
-   m[1][2] = cos(y)*sin(p)*sin(r) - sin(y)*sin(r)
-   m[1][3] = cos(y)*sin(p)*cos(r) + sin(y)*sin(r)
-   m[2][1] = sin(y)*cos(p)
-   m[2][2] = sin(y)*sin(p)*sin(r) + cos(y)*cos(r)
-   m[2][3] = sin(y)*sin(p)*cos(r) - cos(y)*sin(r)
-   m[3][1] = -sin(p)
-   m[3][2] = cos(p)*sin(r)
-   m[3][3] = cos(p)*cos(r)
-   return m
+function rotmatrix(x,y,z) -- ammount to rotate around each axis
+   function rot_x(xangle)
+      local m = matrix()
+      m[2][2] = cos(xangle)
+      m[2][3] = -sin(xangle)
+      m[3][2] = sin(xangle)
+      m[3][3] = cos(xangle)
+      return m
+   end
+   function rot_y(yangle)
+      local m = matrix()
+      m[1][1] = cos(yangle)
+      m[1][3] = sin(yangle)
+      m[3][1] = -sin(yangle)
+      m[3][3] = cos(yangle)
+      return m
+   end
+   function rot_z(zangle)
+      local m = matrix()
+      m[1][1] = cos(zangle)
+      m[1][2] = -sin(zangle)
+      m[2][1] = sin(zangle)
+      m[2][2] = cos(yangle)
+      return m
+   end
+
+   return mmult(mmult(rot_x(x), rot_y(y)), rot_z(z))
 end
 function transmatrix(t)
    local m = matrix()
@@ -182,6 +201,12 @@ function mapply(m, v)
    end
    return res
 end
+function mprint(m)
+   print(vstr(m[1]))
+   print(vstr(m[2]))
+   print(vstr(m[3]))
+   print(vstr(m[4]))
+end
 
 function meshdata(vertices, textureCoords, normals, triangles)
    return {verts=vertices,
@@ -253,7 +278,7 @@ function rasterize(objects)
    -- rasterTriangleTraversal
    for obj in all(objects) do
       obj.pFrags = {}
-      -- print(#(obj.vFrags))
+      print(#(obj.vFrags))
       for vfragTriangle in all(obj.vFrags) do
          local p1 = vfragTriangle[1].v
          local p2 = vfragTriangle[2].v
@@ -296,6 +321,7 @@ end
 function processPixels(objects)
    --pixelShading
    for obj in all(objects) do
+      print("pfrag count: "..#obj.pFrags)
       for pfrag in all(obj.pFrags) do
          local x = flr(pfrag.v[1])
          local y = flr(pfrag.v[2])
