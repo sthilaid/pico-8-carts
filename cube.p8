@@ -11,7 +11,7 @@ cubeMoveSpeed=0.1
 function _init()
    --camera = perspective2(45, 1, 0.1, 1000)
    --camera = ortho(-5, 5, 5, -5, 0.1, 100)
-   camera = perspective(-3, 3, 3, -3, 2, 100)
+   camera = perspective(-3, 3, 3, -3, -2, -100)
    cube = object(transmatrix(vpoint(0,0,8)), cubemesh())
    add(objects, cube)
 
@@ -77,6 +77,14 @@ function drawTriangle(p0, p1, p2, col)
 end
 
 -------------------------------------------------------------------------------
+-- floats
+
+function sign(x)
+   if x < 0 then    return -1
+   else             return 1
+   end
+end   
+-------------------------------------------------------------------------------
 -- vectors
 
 function vpoint(x,y,z) return {x, y, z, 1} end
@@ -91,6 +99,11 @@ function vnormalize(v) local dv = vmakedir(v) return vscale(dv, 1/vnorm(dv)) end
 function vdistsqr(v1, v2) local dv = vsub(v2,v1) return vdot(dv,dv) end
 function vstr(v) return "["..v[1]..","..v[2]..","..v[3]..","..v[4].."]" end
 function vstr3(v) return "["..v[1]..","..v[2]..","..v[3].."]" end
+function vcross(v1,v2) return {v1[2]*v2[3] - v1[3]*v2[2],
+                               v1[3]*v2[1] - v1[1]*v2[3],
+                               v1[1]*v2[2] - v1[2]*v2[1],
+                               0}
+end
 
 -------------------------------------------------------------------------------
 -- matrix
@@ -208,12 +221,12 @@ function mprint(m)
    print(vstr(m[3]))
    print(vstr(m[4]))
 end
-
-function meshdata(vertices, textureCoords, normals, triangles)
+function meshdata(vertices, textureCoords, normals, triangles, cullBackface)
    return {verts=vertices,
            uvs=textureCoords,
            normals=normals,
-           tris=triangles}
+           tris=triangles,
+           cullBackface=cullBackface}
 end
 function object(mat, mesh) return {mat=mat, mesh=mesh, vFrags={}, pFrags={}} end
 
@@ -273,6 +286,11 @@ function processGeometries(cam, objects)
          end
          add(obj.vFrags, clippedTriangleFrags) -- accumulate screen space clipped triangles
       end
+      ---------------------------------
+      -- local test={}
+      -- add(test, obj.vFrags[1])
+      -- obj.vFrags = test
+      ---------------------------------
    end
 end
 
@@ -293,6 +311,14 @@ function rasterize(objects)
          local p1 = vpoint(vfragTriangle[1].vx, vfragTriangle[1].vy, vfragTriangle[1].vz)
          local p2 = vpoint(vfragTriangle[2].vx, vfragTriangle[2].vy, vfragTriangle[2].vz)
          local p3 = vpoint(vfragTriangle[3].vx, vfragTriangle[3].vy, vfragTriangle[3].vz)
+
+         -- if obj.mesh.cullBackface then
+         --    triNormal = vcross(p1, p2)
+         --    if vdot(triNormal, vscale(p1,-1)) < 0 then
+         --       break
+         --    end
+         -- end
+         
          local uv1 = point2d(vfragTriangle[1].u, vfragTriangle[1].v)
          local uv2 = point2d(vfragTriangle[2].u, vfragTriangle[2].v)
          local uv3 = point2d(vfragTriangle[3].u, vfragTriangle[3].v)
@@ -304,7 +330,7 @@ function rasterize(objects)
          local pmin_y = min(min(p1[2], p2[2]), p3[2])
          local pmax_x = max(max(p1[1], p2[1]), p3[1])
          local pmax_y = max(max(p1[2], p2[2]), p3[2])
-         --print("min: "..pstr(pmin).." max: "..pstr(pmax))
+         --print("min: "..pmin_x..","..pmin_y.." max: "..pmax_x..","..pmax_y)
          --print("params: a:"..edgeParams[1].a.."b: "..edgeParams[1].b.."c: "..edgeParams[1].c)
          local triPixelFragCount = 0
          for x=pmin_x, pmax_x do
@@ -312,10 +338,16 @@ function rasterize(objects)
                local isInside = true
                local edgeValues = {}
                for e=1,3 do
+                  -- hack while i figure how to properly do backface culling at the tri level
                   edgeValues[e] = edgeSign(x,y, edgeParams[e].a, edgeParams[e].b, edgeParams[e].c)
-                  isInside = isInside and edgeValues[e] >= 0
-                  if (not isInside) break
+                  --isInside = e==1 or edgeValues[e] == 0 or sign(edgeValues[e]) == sign(edgeValues[e-1])
+                  isInside = isInside and edgeValues[e] <= 0
+                  if not isInside then
+                     break
+                  end
                end
+               --print(edgeValues[1])
+               --print("("..x..","..y.."): "..edgeValues[1]..","..edgeValues[2]..","..edgeValues[3])
                if isInside then
                   local areaSum = (edgeValues[1]  + edgeValues[2] + edgeValues[3])
                   -- should use perspective corrected coordinates?
@@ -415,7 +447,9 @@ function cubemesh()
          {{7,6,3}, {5,12,3}, {6,7,3}},
          {{2,9,4}, {4,5,4}, {8,10,4}},
          {{1,3,5}, {3,2,5}, {4,5,5}},
-         {{5,12,6}, {1,3,6}, {2,9,6}}})
+         {{5,12,6}, {1,3,6}, {2,9,6}}},
+   -- cullBackface
+   true)
 end
 
 __gfx__
