@@ -11,6 +11,10 @@ cube={}
 objects={}
 cubeRotMat=0
 screenMat = 0
+updateDT=0
+geometryDT=0
+rasterDT=0
+pixelDT=0
 
 -- flow
 
@@ -34,6 +38,7 @@ function _update()
       obj.mat = mmult(cubeRotMat, obj.mat)
       mtranslate(obj.mat, translation)
    end
+   updateDT = stat(1)
 end
 
 function _draw()
@@ -49,7 +54,8 @@ debugStrs = {}
 function dprint(str) add(debugStrs, str) end
 function dflush()
    color(7)
-   print("mem:"..stat(0).." cpu:"..stat(1).." fps:"..stat(7))
+   print("mem:"..(stat(0)/2048).."%")
+   print("g:"..geometryDT.." r:"..rasterDT.." p:"..pixelDT)
    for s in all(debugStrs) do
       print(s)
    end
@@ -240,6 +246,10 @@ function mprint(m)
    dprint(vstr(m[3]))
    dprint(vstr(m[4]))
 end
+
+-------------------------------------------------------------------------------
+-- mesh and objects
+
 function meshdata(vertices, textureCoords, normals, triangles, cullBackface)
    return {verts=vertices,
            uvs=textureCoords,
@@ -254,11 +264,27 @@ function fragment(v, uv, n)
            u=uv[1], v = uv[2],
            nx=n[1], ny=n[2], nz=n[3]}
 end
-function geometryVertexShading(camMat, objMat, v, uv, n)
+
+-------------------------------------------------------------------------------
+-- rendering pipeline
+
+function geometryVertexShading(projectionMatrix, mesh, v_index, uv_index, n_index,
+                               processedVerticesCache, processedNormalsCache)
    -- projection to camspace
-   local camspaceVert   = mapply(camMat, mapply(objMat, v))
-   camspaceVert         = vscale(camspaceVert, 1/camspaceVert[4]) // normalize the w component
-   local camspaceNormal = vnormalize(mapply(camMat, mapply(objMat, n)))
+   local camspaceVert = processedVerticesCache[v_index]
+   if not camspaceVert then
+      local v       = mesh.verts[v_index]
+      camspaceVert  = mapply(projectionMatrix, v)
+      camspaceVert  = vscale(camspaceVert, 1/camspaceVert[4]) // normalize the w component
+   end
+   local camspaceNormal  = processedNormalsCache[n_index]
+   if not camspaceNormal then
+      local n       = mesh.normals[n_index]
+      camspaceNormal= vnormalize(mapply(projectionMatrix, n))
+   end
+   local uv = mesh.uvs[uv_index]
+
+   -- fragment creation
    return fragment(camspaceVert, uv, camspaceNormal)
 end
 
@@ -278,18 +304,21 @@ function geometryScreenMapping(vfrag, screenMat)
 end
 
 function processGeometries(cam, objects)
-   -- todo: optimize, only process vertices and normals once
    local vFrags={}
    for obj in all(objects) do
       local mesh = obj.mesh
+      local processedVerticesCache = {}
+      local processedNormalsCache = {}
+      local projectionMatrix = mmult(cam, obj.mat)
       for t in all(mesh.tris) do
          local processedTriangleFrags= {}
          local clippedTriangleFrags = {}
          for tindex=1,3 do
-            local v     = mesh.verts[t[tindex][1]]
-            local uv    = mesh.uvs[t[tindex][2]]
-            local n     = mesh.normals[t[tindex][3]]
-            local vFrag = geometryVertexShading(cam, obj.mat, v, uv, n)
+            local v_index   = t[tindex][1]
+            local uv_index  = t[tindex][2]
+            local n_index   = t[tindex][3]
+            local vFrag = geometryVertexShading(projectionMatrix, mesh, v_index, uv_index, n_index,
+                                                processedVerticesCache, processedNormalsCache)
             --dprint("pv: "..vstr(vFrag.n))
             add(processedTriangleFrags, vFrag)
          end
@@ -312,17 +341,19 @@ function processGeometries(cam, objects)
    return vFrags
 end
 
+function computeEdgeParams(p1, p2) return {a=-(p2[2]-p1[2]), b=(p2[1]-p1[1]), c=(p2[2]-p1[2])*p1[1] - (p2[1]-p1[1])*p1[2]} end
+function edgeSign(px,py,a,b,c) return a*px + b*py + c end
+function baryInterpVertex(w,u,v,v1,v2,v3) return vadd(vadd(vscale(v1, w), vscale(v2, u)), vscale(v3, v)) end
+function baryInterpPoint(w,u,v,v1,v2,v3) return padd(padd(pscale(v1, w), pscale(v2, u)), pscale(v3, v)) end
+function baryInterpValue(w,u,v,v1,v2,v3) return v1*w + v2*u + v3*v end
+function setPixelFragment(tbl, x, y, frag) tbl[(128*y)+x] = frag end
+function getPixelFragment(tbl, x, y) return tbl[(128*y)+x] end
 function rasterize(vFrags)
-   function computeEdgeParams(p1, p2) return {a=-(p2[2]-p1[2]), b=(p2[1]-p1[1]), c=(p2[2]-p1[2])*p1[1] - (p2[1]-p1[1])*p1[2]} end
-   function edgeSign(px,py,a,b,c) return a*px + b*py + c end
-   function baryInterpVertex(w,u,v,v1,v2,v3) return vadd(vadd(vscale(v1, w), vscale(v2, u)), vscale(v3, v)) end
-   function baryInterpPoint(w,u,v,v1,v2,v3) return padd(padd(pscale(v1, w), pscale(v2, u)), pscale(v3, v)) end
    -- rasterTrianglesetup
    -- rasterTriangleTraversal
    local triCount = 0
    local pixelFragCount = 0
    local pFrags = {}
-   for i=1,128 do pFrags[i] = {} end
 
    for vfragTriangle in all(vFrags) do
       triCount += 1
@@ -356,9 +387,9 @@ function rasterize(vFrags)
             local isInside = true
             local edgeValues = {}
             for e=1,3 do
-               -- hack while i figure how to properly do backface culling at the tri level
                edgeValues[e] = edgeSign(x,y, edgeParams[e].a, edgeParams[e].b, edgeParams[e].c)
                --isInside = e==1 or edgeValues[e] == 0 or sign(edgeValues[e]) == sign(edgeValues[e-1])
+               -- hack while i figure how to properly do backface culling at the tri level
                isInside = isInside and edgeValues[e] <= 0
                if not isInside then
                   break
@@ -373,16 +404,17 @@ function rasterize(vFrags)
                local barycentric_v = edgeValues[3] / areaSum
                local barycentric_w = 1 - barycentric_u - barycentric_v
                -- only interpolate depth instead of whole vertex pos?
-               local v = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v, p1, p2, p3)
-               local uv = baryInterpPoint(barycentric_w, barycentric_u, barycentric_v, uv1, uv2, uv3)
-               local n = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v, n1, n2, n3)
-               local pfrag = fragment(v, uv, n)
+               local depth  = baryInterpValue(barycentric_w, barycentric_u, barycentric_v, p1[3], p2[3], p3[3])
+               local uv     = baryInterpPoint(barycentric_w, barycentric_u, barycentric_v, uv1, uv2, uv3)
+               local n      = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v, n1, n2, n3)
+               local pfrag = fragment(vpoint(x,y,depth), uv, n)
                pfrag.col = tricol
 
                -- zbuff check
-               if not pFrags[x][y] or pfrag.vz < pFrags[x][y].vz then
-                  pFrags[x][y] = pfrag
-                  pixelFragCount +=1
+               local existingFrag = getPixelFragment(pFrags, x, y)
+               if (not existingFrag) or pfrag.vz < existingFrag.vz then
+                  setPixelFragment(pFrags, x, y, pfrag)
+                  if (not existingFrag) pixelFragCount +=1
                end
             end
          end
@@ -399,14 +431,22 @@ function processPixels(pFrags)
    for y=1,128 do
       for x=1,128,8 do
          c1,c2,c3,c4,c5,c6,c7,c8 = 0,0,0,0,0,0,0,0
-         if (pFrags[x][y])      c1 = 0xF & flr(pFrags[x][y].col)
-         if (pFrags[x+1][y])    c2 = 0xF & flr(pFrags[x+1][y].col)
-         if (pFrags[x+2][y])    c3 = 0xF & flr(pFrags[x+2][y].col)
-         if (pFrags[x+3][y])    c4 = 0xF & flr(pFrags[x+3][y].col)
-         if (pFrags[x+4][y])    c5 = 0xF & flr(pFrags[x+4][y].col)
-         if (pFrags[x+5][y])    c6 = 0xF & flr(pFrags[x+5][y].col)
-         if (pFrags[x+6][y])    c7 = 0xF & flr(pFrags[x+6][y].col)
-         if (pFrags[x+7][y])    c8 = 0xF & flr(pFrags[x+7][y].col)
+         local frag1 = getPixelFragment(pFrags, x+0, y)
+         local frag2 = getPixelFragment(pFrags, x+1, y)
+         local frag3 = getPixelFragment(pFrags, x+2, y)
+         local frag4 = getPixelFragment(pFrags, x+3, y)
+         local frag5 = getPixelFragment(pFrags, x+4, y)
+         local frag6 = getPixelFragment(pFrags, x+5, y)
+         local frag7 = getPixelFragment(pFrags, x+6, y)
+         local frag8 = getPixelFragment(pFrags, x+7, y)
+         if (frag1) c1 = 0xF & flr(frag1.col)
+         if (frag2) c2 = 0xF & flr(frag2.col)
+         if (frag3) c3 = 0xF & flr(frag3.col)
+         if (frag4) c4 = 0xF & flr(frag4.col)
+         if (frag5) c5 = 0xF & flr(frag5.col)
+         if (frag6) c6 = 0xF & flr(frag6.col)
+         if (frag7) c7 = 0xF & flr(frag7.col)
+         if (frag7) c8 = 0xF & flr(frag7.col)
          -- pset(x-1,y,c1)
          -- pset(x,y,c2)
          -- pset(x+1,y,c3)
@@ -427,9 +467,15 @@ end
 
 function render3d(camera, objects)
    local vFrags = processGeometries(camera, objects)
+   geometryDT = stat(1)
    local pFrags = rasterize(vFrags)
+   rasterDT = stat(1) - geometryDT
    processPixels(pFrags)
+   pixelDT = stat(1) - rasterDT
 end
+
+-------------------------------------------------------------------------------
+-- cube mesh data (from blender .obj export)
 
 function cubemesh()
    return meshdata(
