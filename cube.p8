@@ -9,12 +9,16 @@ __lua__
 cubeMoveSpeed=0.1
 
 -- runtime globals
-camera={}
-cube={}
+camera=false
+cube=false
+room=false
 objects={}
 lights={}
 cubeRotMat=0
 screenMat = 0
+campitch=0
+camyaw=0
+camlen=12
 
 -- runtime debug
 triCount = 0
@@ -29,25 +33,32 @@ pixelDT=0
 -------------------------------------------------------------------------------
 -- flow
 
+function makecam(pitch,yaw, len)
+   return mmult(mmult(perspective(-3, 3, 3, -3, -2, -100), transmatrix(vpoint(0,0,len))), rotmatrix(pitch,yaw,0))
+end
 function _init()
    --camera = perspective2(45, 1, 0.1, 1000)
    --camera = ortho(-5, 5, 5, -5, 0.1, 100)
-   camera = perspective(-3, 3, 3, -3, -2, -100)
-   cube = object(transmatrix(vpoint(0,0,8)), cubemesh())
-   local room = object(transmatrix(vpoint(0,0,18)), roommesh())
+   camera = makecam(campitch,camyaw,camlen)
+   cube = object(mmult(transmatrix(vpoint(0,0,0)), rotmatrix(0.1,0.1,0)), cubemesh())
+   room = object(mmult(transmatrix(vpoint(0,0,0)), rotmatrix(0,0,0)), roommesh())
    add(objects, cube)
    add(objects, room)
 
    local l1 = dirlight(vnormalize(vdir(0,-1,-1)), 1)
    add(lights, l1)
 
-   cubeRotMat= rotmatrix(0.25/30, 0.1/30, 0.05/30)
+   cubeRotMat= rotmatrix(0.25/30, 0.1/30, 0.15/30)
    screenMat = mmult(transmatrix(vpoint(64, 64, 0.5)), scalematrix(64, 64, 0.5))
 end
 
 function _update()
-   if (btn(⬆️)) mtranslate(cube.mat, vpoint(0,0,-cubeMoveSpeed))
-   if (btn(⬇️)) mtranslate(cube.mat, vpoint(0,0,cubeMoveSpeed))
+   if (btn(⬆️)) camlen -= 0.1
+   if (btn(⬇️)) camlen += 0.1
+   if (btn(➡️)) camyaw += 0.01
+   if (btn(⬅️)) camyaw -= 0.01
+   if (btnp(❎)) room.isVisible = not room.isVisible
+   camera = makecam(campitch,camyaw,camlen)
 
    local translation = mgettranslation(cube.mat)
    mtranslate(cube.mat, vscale(translation, -1))
@@ -276,7 +287,7 @@ function meshdata(vertices, textureCoords, normals, triangles, cullBackface)
            tris=triangles,
            cullBackface=cullBackface}
 end
-function object(mat, mesh) return {mat=mat, mesh=mesh} end
+function object(mat, mesh) return {mat=mat, mesh=mesh, isVisible=true} end
 
 -- lights: 0-directional, 1-point
 function dirlight(dir, intensity) return {type=0, pos=vpoint(0,0,0), dir=dir, intensity=intensity, campos=0, camdir=0} end
@@ -340,6 +351,7 @@ function processGeometries(cam, objects, lights)
       l.camdir = mapply(cam, l.dir)
    end
    for obj in all(objects) do
+      if (not obj.isVisible) goto continue
       local mesh = obj.mesh
       local processedVerticesCache = {}
       local processedNormalsCache = {}
@@ -369,6 +381,7 @@ function processGeometries(cam, objects, lights)
          geometryDT += stat(1) - startDT
          rasterizeTriangle(clippedTriangleFrags)
       end
+      ::continue::
    end
 end
 
