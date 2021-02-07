@@ -12,6 +12,7 @@ cubeMoveSpeed=0.1
 camera={}
 cube={}
 objects={}
+lights={}
 cubeRotMat=0
 screenMat = 0
 
@@ -33,7 +34,12 @@ function _init()
    --camera = ortho(-5, 5, 5, -5, 0.1, 100)
    camera = perspective(-3, 3, 3, -3, -2, -100)
    cube = object(transmatrix(vpoint(0,0,8)), cubemesh())
+   local room = object(transmatrix(vpoint(0,0,18)), roommesh())
    add(objects, cube)
+   add(objects, room)
+
+   local l1 = dirlight(vnormalize(vdir(0,-1,-1)), 1)
+   add(lights, l1)
 
    cubeRotMat= rotmatrix(0.25/30, 0.1/30, 0.05/30)
    screenMat = mmult(transmatrix(vpoint(64, 64, 0.5)), scalematrix(64, 64, 0.5))
@@ -42,19 +48,19 @@ end
 function _update()
    if (btn(⬆️)) mtranslate(cube.mat, vpoint(0,0,-cubeMoveSpeed))
    if (btn(⬇️)) mtranslate(cube.mat, vpoint(0,0,cubeMoveSpeed))
-   for obj in all(objects) do
-      local translation = mgettranslation(obj.mat)
-      mtranslate(obj.mat, vscale(translation, -1))
-      obj.mat = mmult(cubeRotMat, obj.mat)
-      mtranslate(obj.mat, translation)
-   end
+
+   local translation = mgettranslation(cube.mat)
+   mtranslate(cube.mat, vscale(translation, -1))
+   cube.mat = mmult(cubeRotMat, cube.mat)
+   mtranslate(cube.mat, translation)
+
    updateDT = stat(1)
 end
 
 function _draw()
    srand(12345)
    cls()
-   render3d(camera, objects)
+   render3d(camera, objects, lights)
    dflush()
 end
 
@@ -272,17 +278,29 @@ function meshdata(vertices, textureCoords, normals, triangles, cullBackface)
 end
 function object(mat, mesh) return {mat=mat, mesh=mesh} end
 
+-- lights: 0-directional, 1-point
+function dirlight(dir, intensity) return {type=0, pos=vpoint(0,0,0), dir=dir, intensity=intensity, campos=0, camdir=0} end
+function pointlight(pos, r0) return {type=1, pos=pos, dir=vdir(0,0,0), r0=r0, campos=0, camdir=0} end
+
 function fragment(v, uv, n)
    return {vx=v[1], vy=v[2], vz=v[3],
            u=uv[1], v = uv[2],
-           nx=n[1], ny=n[2], nz=n[3]}
+           nx=n[1], ny=n[2], nz=n[3],
+           l1pos=false,
+           l1dir=false,
+           l1type=false,
+           l1r0=false,
+   }
 end
 
 -------------------------------------------------------------------------------
 -- rendering pipeline
 
 function geometryVertexShading(projectionMatrix, mesh, v_index, uv_index, n_index,
-                               processedVerticesCache, processedNormalsCache)
+                               processedVerticesCache, processedNormalsCache, lights)
+   -- lighting
+   -- todo
+   
    -- projection to camspace
    local camspaceVert = processedVerticesCache[v_index]
    if not camspaceVert then
@@ -316,7 +334,11 @@ function geometryScreenMapping(vfrag, screenMat)
    vfrag.vz = screen_v[3]
 end
 
-function processGeometries(cam, objects)
+function processGeometries(cam, objects, lights)
+   for l in all(lights) do
+      l.campos = mapply(cam, l.pos)
+      l.camdir = mapply(cam, l.dir)
+   end
    for obj in all(objects) do
       local mesh = obj.mesh
       local processedVerticesCache = {}
@@ -331,7 +353,7 @@ function processGeometries(cam, objects)
             local uv_index  = t[tindex][2]
             local n_index   = t[tindex][3]
             local vFrag = geometryVertexShading(projectionMatrix, mesh, v_index, uv_index, n_index,
-                                                processedVerticesCache, processedNormalsCache)
+                                                processedVerticesCache, processedNormalsCache, lights)
             --dprint("pv: "..vstr(vFrag.n))
             add(processedTriangleFrags, vFrag)
          end
@@ -410,7 +432,7 @@ function rasterizeTriangle(clippedTriangleFrags)
             local depth  = baryInterpValue(barycentric_w, barycentric_u, barycentric_v, p1[3], p2[3], p3[3])
             local uv     = baryInterpPoint(barycentric_w, barycentric_u, barycentric_v, uv1, uv2, uv3)
             local n      = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v, n1, n2, n3)
-            local pfrag = fragment(vpoint(x,y,depth), uv, n)
+            local pfrag  = fragment(vpoint(x,y,depth), uv, n)
             pfrag.col = tricol
             rasterDT += stat(1) - pixelStartDT
             processPixelFragment(pfrag)
@@ -420,15 +442,21 @@ function rasterizeTriangle(clippedTriangleFrags)
 end
 
 function processPixelFragment(pfrag)
+   if (pget(pfrag.vx, pfrag.vy) != 0) return // kind of depth test
+   
    local startDT = stat(1)
    pixelFragCount += 1
+
+   -- lighting todo 
+   
+   -- pixel render
    pset(pfrag.vx, pfrag.vy, pfrag.col)
    pixelDT += stat(1) - startDT
 end
 
-function render3d(camera, objects)
+function render3d(camera, objects, lights)
    renderStartDT = stat(1)
-   processGeometries(camera, objects)
+   processGeometries(camera, objects, lights)
    renderEndDT = stat(1)
 end
 
@@ -462,12 +490,12 @@ function cubemesh()
        point2d(0.875000, 0.750000),
        point2d(0.625000, 1.000000)},
       -- normals
-      {vpoint(0.0000, 1.0000, 0.0000),
-       vpoint(0.0000, 0.0000, 1.0000),
-       vpoint(-1.0000, 0.0000, 0.0000),
-       vpoint(0.0000, -1.0000, 0.0000),
-       vpoint(1.0000, 0.0000, 0.0000),
-       vpoint(0.0000, 0.0000, -1.0000)},
+      {vdir(0.0000, 1.0000, 0.0000),
+       vdir(0.0000, 0.0000, 1.0000),
+       vdir(-1.0000, 0.0000, 0.0000),
+       vdir(0.0000, -1.0000, 0.0000),
+       vdir(1.0000, 0.0000, 0.0000),
+       vdir(0.0000, 0.0000, -1.0000)},
       -- triangles (v,uv,n)
       {{{5,1,1}, {3,2,1}, {1,3,1}},
          {{3,2,2}, {8,4,2}, {4,5,2}},
@@ -484,6 +512,43 @@ function cubemesh()
    -- cullBackface
    true)
 end
+function roommesh()
+   return meshdata(
+        {vpoint(5.000000, 5.000000, -5.000000),
+         vpoint(5.000000, -5.000000, -5.000000),
+         vpoint(5.000000, 5.000000, 5.000000),
+         vpoint(5.000000, -5.000000, 5.000000),
+         vpoint(-5.000000, 5.000000, -5.000000),
+         vpoint(-5.000000, -5.000000, -5.000000),
+         vpoint(-5.000000, 5.000000, 5.000000),
+         vpoint(-5.000000, -5.000000, 5.000000)},
+        {point2d(0.375000, 0.750000),
+         point2d(0.375000, 1.000000),
+         point2d(0.625000, 1.000000),
+         point2d(0.625000, 0.750000),
+         point2d(0.375000, 0.000000),
+         point2d(0.375000, 0.250000),
+         point2d(0.625000, 0.250000),
+         point2d(0.625000, 0.000000),
+         point2d(0.125000, 0.500000),
+         point2d(0.125000, 0.750000),
+         point2d(0.375000, 0.500000),
+         point2d(0.625000, 0.500000)},
+        {vdir(0.0000, 0.0000, -1.0000),
+         vdir(1.0000, 0.0000, 0.0000),
+         vdir(0.0000, 1.0000, 0.0000),
+         vdir(-1.0000, 0.0000, 0.0000)},
+        {{{8,1,1}, {3,2,1}, {4,3,1}},
+         {{6,4,2}, {7,5,2}, {8,6,2}},
+         {{8,7,3}, {2,8,3}, {6,9,3}},
+         {{4,3,4}, {1,10,4}, {2,8,4}},
+         {{8,1,1}, {7,11,1}, {3,2,1}},
+         {{6,4,2}, {5,12,2}, {7,5,2}},
+         {{8,7,3}, {4,3,3}, {2,8,3}},
+         {{4,3,4}, {3,2,4}, {1,10,4}}}
+        )
+end
+
 
 __gfx__
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
