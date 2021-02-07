@@ -2,6 +2,9 @@ pico-8 cartridge // http://www.pico-8.com
 version 29
 __lua__
 
+-------------------------------------------------------------------------------
+-- globals
+
 -- data
 cubeMoveSpeed=0.1
 
@@ -11,11 +14,18 @@ cube={}
 objects={}
 cubeRotMat=0
 screenMat = 0
+
+-- runtime debug
+triCount = 0
+pixelFragCount = 0
 updateDT=0
+renderStartDT=0
+renderEndDT=0
 geometryDT=0
 rasterDT=0
 pixelDT=0
 
+-------------------------------------------------------------------------------
 -- flow
 
 function _init()
@@ -50,16 +60,19 @@ end
 
 -------------------------------------------------------------------------------
 -- debug
+
 debugStrs = {}
 function dprint(str) add(debugStrs, str) end
 function dflush()
    color(7)
    print("mem:"..(stat(0)/2048).."%")
+   print("tri: "..triCount.." pfrags: "..pixelFragCount)
    print("g:"..geometryDT.." r:"..rasterDT.." p:"..pixelDT)
    for s in all(debugStrs) do
       print(s)
    end
    debugStrs = {}
+   geometryDT, rasterDT, pixelDT, triCount, pixelFragCount = 0,0,0,0,0
 end
 
 -------------------------------------------------------------------------------
@@ -304,13 +317,13 @@ function geometryScreenMapping(vfrag, screenMat)
 end
 
 function processGeometries(cam, objects)
-   local vFrags={}
    for obj in all(objects) do
       local mesh = obj.mesh
       local processedVerticesCache = {}
       local processedNormalsCache = {}
       local projectionMatrix = mmult(cam, obj.mat)
       for t in all(mesh.tris) do
+         local startDT = stat(1)
          local processedTriangleFrags= {}
          local clippedTriangleFrags = {}
          for tindex=1,3 do
@@ -330,15 +343,11 @@ function processGeometries(cam, objects)
             geometryScreenMapping(clippedVertexFrag, screenMat)
             --dprint("frag: "..clippedVertexFrag.vx)
          end
-         add(vFrags, clippedTriangleFrags) -- accumulate screen space clipped triangles
+         triCount += 1
+         geometryDT += stat(1) - startDT
+         rasterizeTriangle(clippedTriangleFrags)
       end
-      ---------------------------------
-      -- local test={}
-      -- add(test, vFrags[1])
-      -- vFrags = test
-      ---------------------------------
    end
-   return vFrags
 end
 
 function computeEdgeParams(p1, p2) return {a=-(p2[2]-p1[2]), b=(p2[1]-p1[1]), c=(p2[2]-p1[2])*p1[1] - (p2[1]-p1[1])*p1[2]} end
@@ -348,130 +357,79 @@ function baryInterpPoint(w,u,v,v1,v2,v3) return padd(padd(pscale(v1, w), pscale(
 function baryInterpValue(w,u,v,v1,v2,v3) return v1*w + v2*u + v3*v end
 function setPixelFragment(tbl, x, y, frag) tbl[(128*y)+x] = frag end
 function getPixelFragment(tbl, x, y) return tbl[(128*y)+x] end
-function rasterize(vFrags)
-   -- rasterTrianglesetup
-   -- rasterTriangleTraversal
-   local triCount = 0
-   local pixelFragCount = 0
-   local pFrags = {}
 
-   for vfragTriangle in all(vFrags) do
-      triCount += 1
-      local tricol = rnd(16)
-      local p1 = vpoint(vfragTriangle[1].vx, vfragTriangle[1].vy, vfragTriangle[1].vz)
-      local p2 = vpoint(vfragTriangle[2].vx, vfragTriangle[2].vy, vfragTriangle[2].vz)
-      local p3 = vpoint(vfragTriangle[3].vx, vfragTriangle[3].vy, vfragTriangle[3].vz)
+function rasterizeTriangle(clippedTriangleFrags)
+   local tricol = rnd(16)
+   local p1 = vpoint(clippedTriangleFrags[1].vx, clippedTriangleFrags[1].vy, clippedTriangleFrags[1].vz)
+   local p2 = vpoint(clippedTriangleFrags[2].vx, clippedTriangleFrags[2].vy, clippedTriangleFrags[2].vz)
+   local p3 = vpoint(clippedTriangleFrags[3].vx, clippedTriangleFrags[3].vy, clippedTriangleFrags[3].vz)
 
-      -- if obj.mesh.cullBackface then
-      --    triNormal = vcross(p1, p2)
-      --    if vdot(triNormal, vscale(p1,-1)) < 0 then
-      --       break
-      --    end
-      -- end
-      
-      local uv1 = point2d(vfragTriangle[1].u, vfragTriangle[1].v)
-      local uv2 = point2d(vfragTriangle[2].u, vfragTriangle[2].v)
-      local uv3 = point2d(vfragTriangle[3].u, vfragTriangle[3].v)
-      local n1 = vpoint(vfragTriangle[1].nx, vfragTriangle[1].ny, vfragTriangle[1].nz)
-      local n2 = vpoint(vfragTriangle[2].nx, vfragTriangle[2].ny, vfragTriangle[2].nz)
-      local n3 = vpoint(vfragTriangle[3].nx, vfragTriangle[3].ny, vfragTriangle[3].nz)
-      local edgeParams = {computeEdgeParams(p1, p2), computeEdgeParams(p2, p3), computeEdgeParams(p3, p1)}
-      local pmin_x = flr(min(min(p1[1], p2[1]), p3[1]))
-      local pmin_y = flr(min(min(p1[2], p2[2]), p3[2]))
-      local pmax_x = flr(max(max(p1[1], p2[1]), p3[1]))
-      local pmax_y = flr(max(max(p1[2], p2[2]), p3[2]))
-      --dprint("min: "..pmin_x..","..pmin_y.." max: "..pmax_x..","..pmax_y)
-      --dprint("params: a:"..edgeParams[1].a.."b: "..edgeParams[1].b.."c: "..edgeParams[1].c)
-      for x=pmin_x, pmax_x do
-         for y=pmin_y, pmax_y do
-            local isInside = true
-            local edgeValues = {}
-            for e=1,3 do
-               edgeValues[e] = edgeSign(x,y, edgeParams[e].a, edgeParams[e].b, edgeParams[e].c)
-               --isInside = e==1 or edgeValues[e] == 0 or sign(edgeValues[e]) == sign(edgeValues[e-1])
-               -- hack while i figure how to properly do backface culling at the tri level
-               isInside = isInside and edgeValues[e] <= 0
-               if not isInside then
-                  break
-               end
+   -- if obj.mesh.cullBackface then
+   --    triNormal = vcross(p1, p2)
+   --    if vdot(triNormal, vscale(p1,-1)) < 0 then
+   --       break
+   --    end
+   -- end
+   
+   local uv1 = point2d(clippedTriangleFrags[1].u, clippedTriangleFrags[1].v)
+   local uv2 = point2d(clippedTriangleFrags[2].u, clippedTriangleFrags[2].v)
+   local uv3 = point2d(clippedTriangleFrags[3].u, clippedTriangleFrags[3].v)
+   local n1 = vpoint(clippedTriangleFrags[1].nx, clippedTriangleFrags[1].ny, clippedTriangleFrags[1].nz)
+   local n2 = vpoint(clippedTriangleFrags[2].nx, clippedTriangleFrags[2].ny, clippedTriangleFrags[2].nz)
+   local n3 = vpoint(clippedTriangleFrags[3].nx, clippedTriangleFrags[3].ny, clippedTriangleFrags[3].nz)
+   local edgeParams = {computeEdgeParams(p1, p2), computeEdgeParams(p2, p3), computeEdgeParams(p3, p1)}
+   local pmin_x = flr(min(min(p1[1], p2[1]), p3[1]))
+   local pmin_y = flr(min(min(p1[2], p2[2]), p3[2]))
+   local pmax_x = flr(max(max(p1[1], p2[1]), p3[1]))
+   local pmax_y = flr(max(max(p1[2], p2[2]), p3[2]))
+   --dprint("min: "..pmin_x..","..pmin_y.." max: "..pmax_x..","..pmax_y)
+   --dprint("params: a:"..edgeParams[1].a.."b: "..edgeParams[1].b.."c: "..edgeParams[1].c)
+   for x=pmin_x, pmax_x do
+      for y=pmin_y, pmax_y do
+         local pixelStartDT = stat(1)
+         local isInside = true
+         local edgeValues = {}
+         for e=1,3 do
+            edgeValues[e] = edgeSign(x,y, edgeParams[e].a, edgeParams[e].b, edgeParams[e].c)
+            --isInside = e==1 or edgeValues[e] == 0 or sign(edgeValues[e]) == sign(edgeValues[e-1])
+            -- hack while i figure how to properly do backface culling at the tri level
+            isInside = isInside and edgeValues[e] <= 0
+            if not isInside then
+               break
             end
-            --dprint(edgeValues[1])
-            --dprint("("..x..","..y.."): "..edgeValues[1]..","..edgeValues[2]..","..edgeValues[3])
-            if isInside then
-               local areaSum = (edgeValues[1]  + edgeValues[2] + edgeValues[3])
-               -- should use perspective corrected coordinates?
-               local barycentric_u = edgeValues[2] / areaSum
-               local barycentric_v = edgeValues[3] / areaSum
-               local barycentric_w = 1 - barycentric_u - barycentric_v
-               -- only interpolate depth instead of whole vertex pos?
-               local depth  = baryInterpValue(barycentric_w, barycentric_u, barycentric_v, p1[3], p2[3], p3[3])
-               local uv     = baryInterpPoint(barycentric_w, barycentric_u, barycentric_v, uv1, uv2, uv3)
-               local n      = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v, n1, n2, n3)
-               local pfrag = fragment(vpoint(x,y,depth), uv, n)
-               pfrag.col = tricol
-
-               -- zbuff check
-               local existingFrag = getPixelFragment(pFrags, x, y)
-               if (not existingFrag) or pfrag.vz < existingFrag.vz then
-                  setPixelFragment(pFrags, x, y, pfrag)
-                  if (not existingFrag) pixelFragCount +=1
-               end
-            end
+         end
+         --dprint(edgeValues[1])
+         --dprint("("..x..","..y.."): "..edgeValues[1]..","..edgeValues[2]..","..edgeValues[3])
+         if isInside then
+            local areaSum = (edgeValues[1]  + edgeValues[2] + edgeValues[3])
+            -- should use perspective corrected coordinates?
+            local barycentric_u = edgeValues[2] / areaSum
+            local barycentric_v = edgeValues[3] / areaSum
+            local barycentric_w = 1 - barycentric_u - barycentric_v
+            -- only interpolate depth instead of whole vertex pos?
+            local depth  = baryInterpValue(barycentric_w, barycentric_u, barycentric_v, p1[3], p2[3], p3[3])
+            local uv     = baryInterpPoint(barycentric_w, barycentric_u, barycentric_v, uv1, uv2, uv3)
+            local n      = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v, n1, n2, n3)
+            local pfrag = fragment(vpoint(x,y,depth), uv, n)
+            pfrag.col = tricol
+            rasterDT += stat(1) - pixelStartDT
+            processPixelFragment(pfrag)
          end
       end
    end
-   dprint("triangle count: "..triCount)
-   dprint("pfrag count: "..pixelFragCount)
-   return pFrags
 end
-function processPixels(pFrags)
-   --pixelShading
-   --pixelMerging ?
-   --pixelRender
-   for y=1,128 do
-      for x=1,128,8 do
-         c1,c2,c3,c4,c5,c6,c7,c8 = 0,0,0,0,0,0,0,0
-         local frag1 = getPixelFragment(pFrags, x+0, y)
-         local frag2 = getPixelFragment(pFrags, x+1, y)
-         local frag3 = getPixelFragment(pFrags, x+2, y)
-         local frag4 = getPixelFragment(pFrags, x+3, y)
-         local frag5 = getPixelFragment(pFrags, x+4, y)
-         local frag6 = getPixelFragment(pFrags, x+5, y)
-         local frag7 = getPixelFragment(pFrags, x+6, y)
-         local frag8 = getPixelFragment(pFrags, x+7, y)
-         if (frag1) c1 = 0xF & flr(frag1.col)
-         if (frag2) c2 = 0xF & flr(frag2.col)
-         if (frag3) c3 = 0xF & flr(frag3.col)
-         if (frag4) c4 = 0xF & flr(frag4.col)
-         if (frag5) c5 = 0xF & flr(frag5.col)
-         if (frag6) c6 = 0xF & flr(frag6.col)
-         if (frag7) c7 = 0xF & flr(frag7.col)
-         if (frag7) c8 = 0xF & flr(frag7.col)
-         -- pset(x-1,y,c1)
-         -- pset(x,y,c2)
-         -- pset(x+1,y,c3)
-         -- pset(x+2,y,c4)
-         -- pset(x+3,y,c5)
-         -- pset(x+4,y,c6)
-         -- pset(x+5,y,c7)
-         -- pset(x+6,y,c8)
 
-         local addr = 0x6000+64*(y-1)+x\2
-         poke2(addr, (c4 << 12) + (c3 << 8) + (c2 << 4) + c1)
-         poke2(addr+2, (c8 << 12) + (c7 << 8) + (c6 << 4) + c5)
-         -- local data = (c8<<28)+(c7<<24)+(c6<<20)+(c5<<16)+(c4<<12)+(c3<<8)+(c2<<4)+c1
-         -- poke4(addr, data)
-      end
-   end
+function processPixelFragment(pfrag)
+   local startDT = stat(1)
+   pixelFragCount += 1
+   pset(pfrag.vx, pfrag.vy, pfrag.col)
+   pixelDT += stat(1) - startDT
 end
 
 function render3d(camera, objects)
-   local vFrags = processGeometries(camera, objects)
-   geometryDT = stat(1)
-   local pFrags = rasterize(vFrags)
-   rasterDT = stat(1) - geometryDT
-   processPixels(pFrags)
-   pixelDT = stat(1) - rasterDT
+   renderStartDT = stat(1)
+   processGeometries(camera, objects)
+   renderEndDT = stat(1)
 end
 
 -------------------------------------------------------------------------------
