@@ -8,10 +8,28 @@ __lua__
 -- data
 cubeMoveSpeed=0.1
 
+_pal={8,136,130,133,0,129,1,140,12,11,139,3,131,6,6,5}
+red_shades={1,2,3,4,5}
+blue_shades={9,8,7,6,5}
+green_shades={10,11,12,13,5}
+-- color indices for light shading
+color_red=0
+color_blue=1
+color_green=2
+bg_color=15
+
+function getShades(c)
+   if (c == color_red) return red_shades
+   if (c == color_blue) return blue_shades
+   if (c == color_green) return green_shades
+   return green_shades
+end
+
 -- runtime globals
 camera=false
 cube=false
 room=false
+l1=false
 objects={}
 lights={}
 cubeRotMat=0
@@ -45,7 +63,7 @@ function _init()
    add(objects, cube)
    add(objects, room)
 
-   local l1 = dirlight(vnormalize(vdir(0,-1,-1)), 1)
+   l1 = dirlight(vnormalize(vdir(0,-1,-1)), 1)
    add(lights, l1)
 
    cubeRotMat= rotmatrix(0.25/30, 0.1/30, 0.15/30)
@@ -60,17 +78,22 @@ function _update()
    if (btnp(❎)) room.isVisible = not room.isVisible
    camera = makecam(campitch,camyaw,camlen)
 
-   local translation = mgettranslation(cube.mat)
-   mtranslate(cube.mat, vscale(translation, -1))
-   cube.mat = mmult(cubeRotMat, cube.mat)
-   mtranslate(cube.mat, translation)
+   -- local translation = mgettranslation(cube.mat)
+   -- mtranslate(cube.mat, vscale(translation, -1))
+   -- cube.mat = mmult(cubeRotMat, cube.mat)
+   -- mtranslate(cube.mat, translation)
+
+   l1.dir = mapply(cubeRotMat, l1.dir)
 
    updateDT = stat(1)
 end
 
 function _draw()
    srand(12345)
-   cls()
+   for i,c in pairs(_pal) do
+      pal(i-1,c,1)
+   end
+   cls(bg_color)
    render3d(camera, objects, lights)
    dflush()
 end
@@ -81,7 +104,7 @@ end
 debugStrs = {}
 function dprint(str) add(debugStrs, str) end
 function dflush()
-   color(7)
+   color(14)
    print("mem:"..(stat(0)/2048).."%")
    print("tri: "..triCount.." pfrags: "..pixelFragCount)
    print("g:"..geometryDT.." r:"..rasterDT.." p:"..pixelDT)
@@ -103,33 +126,33 @@ function pscale(p,s)    return point2d(p[1]*s, p[2]*s) end
 function pdot(p1, p2)   return p1[1] * p2[1] + p1[2] * p2[2] end
 function pstr(p)        return "<"..p[1]..","..p[2]..">" end
 
--- https://stackoverflow.com/questions/2049582/how-to-determine-if-a-point-is-in-a-2d-triangle
-function pointInTriangle(p, t1, t2, t3)
-   function sign(p1, p2, p3)
-      return (p1[1] - p3[1]) * (p2[2] - p3[2]) - (p2[1] - p3[1]) * (p1[2] - p3[2])
-   end
+-- -- https://stackoverflow.com/questions/2049582/how-to-determine-if-a-point-is-in-a-2d-triangle
+-- function pointInTriangle(p, t1, t2, t3)
+--    function sign(p1, p2, p3)
+--       return (p1[1] - p3[1]) * (p2[2] - p3[2]) - (p2[1] - p3[1]) * (p1[2] - p3[2])
+--    end
 
-   local d1 = sign(p, t1, t2);
-   local d2 = sign(p, t2, t3);
-   local d3 = sign(p, t3, t1);
+--    local d1 = sign(p, t1, t2);
+--    local d2 = sign(p, t2, t3);
+--    local d3 = sign(p, t3, t1);
 
-   local has_neg = (d1 < 0) or (d2 < 0) or (d3 < 0)
-   local has_pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
+--    local has_neg = (d1 < 0) or (d2 < 0) or (d3 < 0)
+--    local has_pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
 
-   return not (has_neg and has_pos);
-end
+--    return not (has_neg and has_pos);
+-- end
 
-function drawTriangle(p0, p1, p2, col)
-   local pmin = point2d(min(min(p0[1], p1[1]), p2[1]), min(min(p0[2], p1[2]), p2[2]))
-   local pmax = point2d(max(max(p0[1], p1[1]), p2[1]), max(max(p0[2], p1[2]), p2[2]))
-   for x=pmin[1], pmax[1] do
-      for y=pmin[2], pmax[2] do
-         if pointInTriangle(point2d(x,y), p0, p1, p2) then
-            pset(x, y, col)
-         end
-      end
-   end
-end
+-- function drawTriangle(p0, p1, p2, col)
+--    local pmin = point2d(min(min(p0[1], p1[1]), p2[1]), min(min(p0[2], p1[2]), p2[2]))
+--    local pmax = point2d(max(max(p0[1], p1[1]), p2[1]), max(max(p0[2], p1[2]), p2[2]))
+--    for x=pmin[1], pmax[1] do
+--       for y=pmin[2], pmax[2] do
+--          if pointInTriangle(point2d(x,y), p0, p1, p2) then
+--             pset(x, y, col)
+--          end
+--       end
+--    end
+-- end
 
 -------------------------------------------------------------------------------
 -- floats
@@ -290,13 +313,15 @@ end
 function object(mat, mesh) return {mat=mat, mesh=mesh, isVisible=true} end
 
 -- lights: 0-directional, 1-point
-function dirlight(dir, intensity) return {type=0, pos=vpoint(0,0,0), dir=dir, intensity=intensity, campos=0, camdir=0} end
+function dirlight(dir, r0) return {type=0, pos=vpoint(0,0,0), dir=dir, r0=r0, campos=0, camdir=0} end
 function pointlight(pos, r0) return {type=1, pos=pos, dir=vdir(0,0,0), r0=r0, campos=0, camdir=0} end
 
-function fragment(v, uv, n)
+function fragment(v, uv, n, viewdir, color)
    return {vx=v[1], vy=v[2], vz=v[3],
            u=uv[1], v = uv[2],
            nx=n[1], ny=n[2], nz=n[3],
+           viewdir=viewdir,
+           color=color,
            l1pos=false,
            l1dir=false,
            l1type=false,
@@ -308,14 +333,25 @@ end
 -- rendering pipeline
 
 function geometryVertexShading(projectionMatrix, mesh, v_index, uv_index, n_index,
-                               processedVerticesCache, processedNormalsCache, lights)
+                               processedVerticesCache, processedNormalsCache, lights, tcolor)
+   local v       = mesh.verts[v_index]
+
    -- lighting
-   -- todo
+   local l1dir  = false
+   local l1type = false
+   local l1r0   = false
+
+   local l1 = lights[1]
+   if l1 then
+      if (l1.type == 0) l1dir = l1.dir
+      if (l1.type == 1) l1dir = vnormalize(vsub(l1.pos, v))
+      l1type= l1.type
+      l1r0  = l1.r0
+   end
    
    -- projection to camspace
    local camspaceVert = processedVerticesCache[v_index]
    if not camspaceVert then
-      local v       = mesh.verts[v_index]
       camspaceVert  = mapply(projectionMatrix, v)
       camspaceVert  = vscale(camspaceVert, 1/camspaceVert[4]) // normalize the w component
    end
@@ -326,8 +362,13 @@ function geometryVertexShading(projectionMatrix, mesh, v_index, uv_index, n_inde
    end
    local uv = mesh.uvs[uv_index]
 
+   local viewdir = vscale(vnormalize(vdir(camspaceVert[1],camspaceVert[2],camspaceVert[3])), -1)
    -- fragment creation
-   return fragment(camspaceVert, uv, camspaceNormal)
+   local vfrag = fragment(camspaceVert, uv, camspaceNormal, viewdir, tcolor)
+   vfrag.l1dir  = l1dir
+   vfrag.l1type = l1type
+   vfrag.l1r0   = l1r0
+   return vfrag
 end
 
 function geometryClipping(projVertFrag, clippedTriangles)
@@ -360,12 +401,13 @@ function processGeometries(cam, objects, lights)
          local startDT = stat(1)
          local processedTriangleFrags= {}
          local clippedTriangleFrags = {}
+         local triangleColor = t[4]
          for tindex=1,3 do
             local v_index   = t[tindex][1]
             local uv_index  = t[tindex][2]
             local n_index   = t[tindex][3]
             local vFrag = geometryVertexShading(projectionMatrix, mesh, v_index, uv_index, n_index,
-                                                processedVerticesCache, processedNormalsCache, lights)
+                                                processedVerticesCache, processedNormalsCache, lights, triangleColor)
             --dprint("pv: "..vstr(vFrag.n))
             add(processedTriangleFrags, vFrag)
          end
@@ -380,6 +422,7 @@ function processGeometries(cam, objects, lights)
          triCount += 1
          geometryDT += stat(1) - startDT
          rasterizeTriangle(clippedTriangleFrags)
+         --if (triCount == 8) return
       end
       ::continue::
    end
@@ -394,7 +437,7 @@ function setPixelFragment(tbl, x, y, frag) tbl[(128*y)+x] = frag end
 function getPixelFragment(tbl, x, y) return tbl[(128*y)+x] end
 
 function rasterizeTriangle(clippedTriangleFrags)
-   local tricol = rnd(16)
+   local tricol = clippedTriangleFrags[1].color --rnd(16)
    local p1 = vpoint(clippedTriangleFrags[1].vx, clippedTriangleFrags[1].vy, clippedTriangleFrags[1].vz)
    local p2 = vpoint(clippedTriangleFrags[2].vx, clippedTriangleFrags[2].vy, clippedTriangleFrags[2].vz)
    local p3 = vpoint(clippedTriangleFrags[3].vx, clippedTriangleFrags[3].vy, clippedTriangleFrags[3].vz)
@@ -445,8 +488,20 @@ function rasterizeTriangle(clippedTriangleFrags)
             local depth  = baryInterpValue(barycentric_w, barycentric_u, barycentric_v, p1[3], p2[3], p3[3])
             local uv     = baryInterpPoint(barycentric_w, barycentric_u, barycentric_v, uv1, uv2, uv3)
             local n      = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v, n1, n2, n3)
-            local pfrag  = fragment(vpoint(x,y,depth), uv, n)
-            pfrag.col = tricol
+            local l1dir  = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v,
+                                            clippedTriangleFrags[1].l1dir,
+                                            clippedTriangleFrags[2].l1dir,
+                                            clippedTriangleFrags[3].l1dir)
+            local l1type = clippedTriangleFrags[1].l1type
+            local l1r0   = clippedTriangleFrags[1].l1r0
+            local viewdir= baryInterpVertex(barycentric_w, barycentric_u, barycentric_v,
+                                            clippedTriangleFrags[1].viewdir,
+                                            clippedTriangleFrags[2].viewdir,
+                                            clippedTriangleFrags[3].viewdir)
+            local pfrag  = fragment(vpoint(x,y,depth), uv, n, viewdir, tricol)
+            pfrag.l1dir  = l1dir
+            pfrag.l1type = l1type
+            pfrag.l1r0   = l1r0
             rasterDT += stat(1) - pixelStartDT
             processPixelFragment(pfrag)
          end
@@ -455,15 +510,19 @@ function rasterizeTriangle(clippedTriangleFrags)
 end
 
 function processPixelFragment(pfrag)
-   if (pget(pfrag.vx, pfrag.vy) != 0) return // kind of depth test
+   if (pget(pfrag.vx, pfrag.vy) != bg_color) return // kind of depth test
    
    local startDT = stat(1)
    pixelFragCount += 1
 
-   -- lighting todo 
+   -- lighting
+   local lightRatio = max(0,vdot(pfrag.l1dir, vdir(pfrag.nx,pfrag.ny, pfrag.nz)))
+   local color_shades = getShades(pfrag.color)
+   local shadedColorIndex = min(flr(lightRatio * (#color_shades-1))+1, #color_shades)
+   local shadedColor = color_shades[shadedColorIndex]
    
    -- pixel render
-   pset(pfrag.vx, pfrag.vy, pfrag.col)
+   pset(pfrag.vx, pfrag.vy, shadedColor)
    pixelDT += stat(1) - startDT
 end
 
@@ -509,19 +568,19 @@ function cubemesh()
        vdir(0.0000, -1.0000, 0.0000),
        vdir(1.0000, 0.0000, 0.0000),
        vdir(0.0000, 0.0000, -1.0000)},
-      -- triangles (v,uv,n)
-      {{{5,1,1}, {3,2,1}, {1,3,1}},
-         {{3,2,2}, {8,4,2}, {4,5,2}},
-         {{7,6,3}, {6,7,3}, {8,8,3}},
-         {{2,9,4}, {8,10,4}, {6,11,4}},
-         {{1,3,5}, {4,5,5}, {2,9,5}},
-         {{5,12,6}, {2,9,6}, {6,7,6}},
-         {{5,1,1}, {7,13,1}, {3,2,1}},
-         {{3,2,2}, {7,14,2}, {8,4,2}},
-         {{7,6,3}, {5,12,3}, {6,7,3}},
-         {{2,9,4}, {4,5,4}, {8,10,4}},
-         {{1,3,5}, {3,2,5}, {4,5,5}},
-         {{5,12,6}, {1,3,6}, {2,9,6}}},
+      -- triangles (v,uv,n) - col
+      {{{5,1,1}, {3,2,1}, {1,3,1},      color_red},
+         {{3,2,2}, {8,4,2}, {4,5,2},    color_red},
+         {{7,6,3}, {6,7,3}, {8,8,3},    color_red},
+         {{2,9,4}, {8,10,4}, {6,11,4},  color_red},
+         {{1,3,5}, {4,5,5}, {2,9,5},    color_red},
+         {{5,12,6}, {2,9,6}, {6,7,6},   color_red},
+         {{5,1,1}, {7,13,1}, {3,2,1},   color_red},
+         {{3,2,2}, {7,14,2}, {8,4,2},   color_red},
+         {{7,6,3}, {5,12,3}, {6,7,3},   color_red},
+         {{2,9,4}, {4,5,4}, {8,10,4},   color_red},
+         {{1,3,5}, {3,2,5}, {4,5,5},    color_red},
+         {{5,12,6}, {1,3,6}, {2,9,6},   color_red}},
    -- cullBackface
    true)
 end
@@ -551,14 +610,14 @@ function roommesh()
          vdir(1.0000, 0.0000, 0.0000),
          vdir(0.0000, 1.0000, 0.0000),
          vdir(-1.0000, 0.0000, 0.0000)},
-        {{{8,1,1}, {3,2,1}, {4,3,1}},
-         {{6,4,2}, {7,5,2}, {8,6,2}},
-         {{8,7,3}, {2,8,3}, {6,9,3}},
-         {{4,3,4}, {1,10,4}, {2,8,4}},
-         {{8,1,1}, {7,11,1}, {3,2,1}},
-         {{6,4,2}, {5,12,2}, {7,5,2}},
-         {{8,7,3}, {4,3,3}, {2,8,3}},
-         {{4,3,4}, {3,2,4}, {1,10,4}}}
+        {{{8,1,1}, {3,2,1}, {4,3,1},    color_blue},
+         {{6,4,2}, {7,5,2}, {8,6,2},    color_blue},
+         {{8,7,3}, {2,8,3}, {6,9,3},    color_blue},
+         {{4,3,4}, {1,10,4}, {2,8,4},   color_blue},
+         {{8,1,1}, {7,11,1}, {3,2,1},   color_blue},
+         {{6,4,2}, {5,12,2}, {7,5,2},   color_blue},
+         {{8,7,3}, {4,3,3}, {2,8,3},    color_blue},
+         {{4,3,4}, {3,2,4}, {1,10,4},   color_blue}}
         )
 end
 
