@@ -25,7 +25,7 @@ cubeRotMat=0
 screenMat = 0
 campitch=0
 camyaw=0
-camlen=5
+camlen=3
 shouldRotateLight=true
 
 -- runtime debug
@@ -48,10 +48,10 @@ function _init()
    camera = makecam(campitch,camyaw,camlen)
 
    cube = object(mmult(transmatrix(vpoint(0,0,0)), rotmatrix(0.1,0.1,0)), cubemesh())
+   cube.isVisible = false
    add(objects, cube)
 
    apple = object(rotmatrix(0.05,0.1,0), appleMesh())
-   apple.isVisible = false
    add(objects, apple)
 
    --room = object(mmult(transmatrix(vpoint(0,0,0)), rotmatrix(0,0,0)), roommesh())
@@ -112,6 +112,7 @@ function dflush()
    for s in all(debugStrs) do
       print(s)
    end
+   print("⬅️➡️⬆️⬇️:cam ❎:mesh 🅾️:lightrot", 0, 122)
    debugStrs = {}
    geometryDT, rasterDT, pixelDT, triCount, pixelFragCount = 0,0,0,0,0
 end
