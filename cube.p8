@@ -1,18 +1,15 @@
 pico-8 cartridge // http://www.pico-8.com
 version 29
 __lua__
+-- RealTime Renderering
+-- by sthilaid
 
--------------------------------------------------------------------------------
--- globals
-
--- data
+-->8
+-- data and global vars
 _pal={0,128,133,5,134,6,135,15,7}
 white_shades={0,1,2,3,4,5,6,7,8} -- color indices for light shading from lighting 0->1
 bg_color=13
-
-function getShades(c)
-   return white_shades
-end
+interpolateTriangles = false
 
 -- runtime globals
 camera=false
@@ -39,6 +36,7 @@ rasterDT=0
 pixelDT=0
 
 -------------------------------------------------------------------------------
+-->8
 -- flow
 
 function makecam(pitch,yaw, len)
@@ -116,6 +114,9 @@ function dflush()
    debugStrs = {}
    geometryDT, rasterDT, pixelDT, triCount, pixelFragCount = 0,0,0,0,0
 end
+
+-->8
+-- math
 
 -------------------------------------------------------------------------------
 -- points (vector2d)
@@ -323,11 +324,9 @@ function object(mat, mesh) return {mat=mat, mesh=mesh, isVisible=true} end
 function dirlight(dir, r0) return {type=0, pos=vpoint(0,0,0), dir=dir, r0=r0, campos=0, camdir=0} end
 function pointlight(pos, r0) return {type=1, pos=pos, dir=vdir(0,0,0), r0=r0, campos=0, camdir=0} end
 
-function fragment(v, n, worldV, color)
+function fragment(v, n)
    return {vx=v[1], vy=v[2], vz=v[3],
            nx=n[1], ny=n[2], nz=n[3],
-           wvx=worldV[1], wvy=worldV[2], wvz=worldV[3],
-           color=color,
            l1pos=false,
            l1dir=false,
            l1type=false,
@@ -336,6 +335,7 @@ function fragment(v, n, worldV, color)
 end
 
 -------------------------------------------------------------------------------
+-->8
 -- rendering pipeline
 
 function geometryVertexShading(projectionMatrix, mesh, v_index, n_index,
@@ -355,7 +355,7 @@ function geometryVertexShading(projectionMatrix, mesh, v_index, n_index,
       l1r0  = l1.r0
    end
    
-   -- projection to camspace
+   -- vertex projection
    local camspaceVert = processedVerticesCache[v_index]
    if not camspaceVert then
       camspaceVert  = mapply(projectionMatrix, v)
@@ -364,7 +364,7 @@ function geometryVertexShading(projectionMatrix, mesh, v_index, n_index,
    local n  = mesh.normals[n_index]
 
    -- fragment creation
-   local vfrag = fragment(camspaceVert, n, v, tcolor)
+   local vfrag  = fragment(camspaceVert, n)
    vfrag.l1dir  = l1dir
    vfrag.l1type = l1type
    vfrag.l1r0   = l1r0
@@ -395,7 +395,7 @@ function processGeometries(cam, objects, lights)
       if (not obj.isVisible) goto continue
       local mesh = obj.mesh
       local processedVerticesCache = {}
-      local projectionMatrix = mmult(cam, obj.mat)
+      local projectionMatrix = mmult(screenMat, mmult(cam, obj.mat))
       for t in all(mesh.tris) do
          local startDT = stat(1)
          local processedTriangleFrags= {}
@@ -404,22 +404,14 @@ function processGeometries(cam, objects, lights)
          for tindex=1,3 do
             local v_index   = t[tindex][1]
             local n_index   = t[tindex][2]
-            local vFrag = geometryVertexShading(projectionMatrix, mesh, v_index, n_index,
-                                                processedVerticesCache, lights, triangleColor)
+            local vFrag     = geometryVertexShading(projectionMatrix, mesh, v_index, n_index,
+                                                    processedVerticesCache, lights, triangleColor)
             --dprint("pv: "..vstr(vFrag.n))
             add(processedTriangleFrags, vFrag)
          end
-         for processedTriangle in all(processedTriangleFrags) do
-            geometryClipping(processedTriangle, clippedTriangleFrags)
-            --dprint(processedTriangle.v[1].." -> "..clippedTriangleFrags[#clippedTriangleFrags].v[1])
-         end
-         for clippedVertexFrag in all(clippedTriangleFrags) do
-            geometryScreenMapping(clippedVertexFrag, screenMat)
-            --dprint("frag: "..clippedVertexFrag.vx)
-         end
          triCount += 1
          geometryDT += stat(1) - startDT
-         rasterizeTriangle(clippedTriangleFrags)
+         rasterizeTriangle(processedTriangleFrags)
       end
       ::continue::
    end
@@ -430,8 +422,37 @@ function edgeSign(px,py,a,b,c) return a*px + b*py + c end
 function baryInterpVertex(w,u,v,v1,v2,v3) return vadd(vadd(vscale(v1, w), vscale(v2, u)), vscale(v3, v)) end
 function baryInterpPoint(w,u,v,v1,v2,v3) return padd(padd(pscale(v1, w), pscale(v2, u)), pscale(v3, v)) end
 function baryInterpValue(w,u,v,v1,v2,v3) return v1*w + v2*u + v3*v end
-function setPixelFragment(tbl, x, y, frag) tbl[(128*y)+x] = frag end
-function getPixelFragment(tbl, x, y) return tbl[(128*y)+x] end
+function interpolateTri(x, y, vfrag1, vfrag2, vfrag3, edgeValues)
+   local areaSum = (edgeValues[1]  + edgeValues[2] + edgeValues[3])
+   -- should use perspective corrected coordinates?
+   local barycentric_u = edgeValues[2] / areaSum
+   local barycentric_v = edgeValues[3] / areaSum
+   local barycentric_w = 1 - barycentric_u - barycentric_v
+   -- only interpolate depth instead of whole vertex pos?
+   local depth  = baryInterpValue(barycentric_w, barycentric_u, barycentric_v, vfrag1.vz, vfrag2.vz, vfrag3.vz)
+   local n      = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v,
+                                   vdir(vfrag1.nx, vfrag1.ny, vfrag1.nz),
+                                   vdir(vfrag2.nx, vfrag2.ny, vfrag2.nz),
+                                   vdir(vfrag3.nx, vfrag3.ny, vfrag3.nz))
+
+   local l1type = vfrag1.l1type
+   local l1dir = false
+   local l1r0 = false
+   if l1type == 0 then -- directional
+      l1dir = vfrag1.l1dir
+   elseif l1type == 1 then -- omni
+      -- todo add l1pos instead...
+      l1dir  = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v,
+                                vfrag1.l1dir, vfrag2.l1dir, vfrag3.l1dir)
+      l1r0   = vfrag11.l1r0
+   end
+
+   local pfrag  = fragment(vpoint(x,y,depth), n)
+   pfrag.l1dir  = l1dir
+   pfrag.l1type = l1type
+   pfrag.l1r0   = l1r0
+   return pfrag
+end
 
 function rasterizeTriangle(clippedTriangleFrags)
    local tricol = clippedTriangleFrags[1].color --rnd(16)
@@ -439,19 +460,8 @@ function rasterizeTriangle(clippedTriangleFrags)
    local p2 = vpoint(clippedTriangleFrags[2].vx, clippedTriangleFrags[2].vy, clippedTriangleFrags[2].vz)
    local p3 = vpoint(clippedTriangleFrags[3].vx, clippedTriangleFrags[3].vy, clippedTriangleFrags[3].vz)
 
-   -- if obj.mesh.cullBackface then
-   --    triNormal = vcross(p1, p2)
-   --    if vdot(triNormal, vscale(p1,-1)) < 0 then
-   --       break
-   --    end
-   -- end
+   -- todo backface culling
    
-   local n1 = vpoint(clippedTriangleFrags[1].nx, clippedTriangleFrags[1].ny, clippedTriangleFrags[1].nz)
-   local n2 = vpoint(clippedTriangleFrags[2].nx, clippedTriangleFrags[2].ny, clippedTriangleFrags[2].nz)
-   local n3 = vpoint(clippedTriangleFrags[3].nx, clippedTriangleFrags[3].ny, clippedTriangleFrags[3].nz)
-   local wv1 = vpoint(clippedTriangleFrags[1].wvx, clippedTriangleFrags[1].wvy, clippedTriangleFrags[1].wvz)
-   local wv2 = vpoint(clippedTriangleFrags[2].wvx, clippedTriangleFrags[2].wvy, clippedTriangleFrags[2].wvz)
-   local wv3 = vpoint(clippedTriangleFrags[3].wvx, clippedTriangleFrags[3].wvy, clippedTriangleFrags[3].wvz)
    local edgeParams = {computeEdgeParams(p1, p2), computeEdgeParams(p2, p3), computeEdgeParams(p3, p1)}
    local pmin_x = flr(min(min(p1[1], p2[1]), p3[1]))
    local pmin_y = flr(min(min(p1[2], p2[2]), p3[2]))
@@ -476,34 +486,17 @@ function rasterizeTriangle(clippedTriangleFrags)
          --dprint(edgeValues[1])
          --dprint("("..x..","..y.."): "..edgeValues[1]..","..edgeValues[2]..","..edgeValues[3])
          if isInside then
-            local areaSum = (edgeValues[1]  + edgeValues[2] + edgeValues[3])
-            -- should use perspective corrected coordinates?
-            local barycentric_u = edgeValues[2] / areaSum
-            local barycentric_v = edgeValues[3] / areaSum
-            local barycentric_w = 1 - barycentric_u - barycentric_v
-            -- only interpolate depth instead of whole vertex pos?
-            local depth  = baryInterpValue(barycentric_w, barycentric_u, barycentric_v, p1[3], p2[3], p3[3])
-            local n      = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v, n1, n2, n3)
-            local wv     = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v, wv1, wv2, wv3)
-
-            local l1type = clippedTriangleFrags[1].l1type
-            local l1dir = false
-            local l1r0 = false
-            if l1type == 0 then -- directional
-               l1dir = clippedTriangleFrags[1].l1dir
-            elseif l1type == 1 then -- omni
-               -- todo add l1pos instead...
-               l1dir  = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v,
-                                         clippedTriangleFrags[1].l1dir,
-                                         clippedTriangleFrags[2].l1dir,
-                                         clippedTriangleFrags[3].l1dir)
-               l1r0   = clippedTriangleFrags[1].l1r0
+            local pfrag = false
+            if interpolateTriangles then
+               pfrag = interpolateTri(x, y, clippedTriangleFrags[1], clippedTriangleFrags[2], clippedTriangleFrags[3], edgeValues)
+            else
+               local v = vpoint(x, y, clippedTriangleFrags[1].vz)
+               local n = vdir(clippedTriangleFrags[1].nx, clippedTriangleFrags[1].ny, clippedTriangleFrags[1].nz)
+               pfrag = fragment(v, n)
+               pfrag.l1dir  = clippedTriangleFrags[1].l1dir
+               pfrag.l1type = clippedTriangleFrags[1].l1type
             end
 
-            local pfrag  = fragment(vpoint(x,y,depth), n, wv, viewdir, tricol)
-            pfrag.l1dir  = l1dir
-            pfrag.l1type = l1type
-            pfrag.l1r0   = l1r0
             rasterDT += stat(1) - pixelStartDT
             processPixelFragment(pfrag)
          end
@@ -512,8 +505,6 @@ function rasterizeTriangle(clippedTriangleFrags)
 end
 
 function processPixelFragment(pfrag)
-   if (pget(pfrag.vx, pfrag.vy) != bg_color) return // kind of depth test
-   
    local startDT = stat(1)
    pixelFragCount += 1
 
@@ -522,13 +513,8 @@ function processPixelFragment(pfrag)
    if pfrag.l1type == 0 then
       lightRatio = clamp(0,1,max(0,vdot(pfrag.l1dir, vdir(pfrag.nx,pfrag.ny, pfrag.nz))))
    end
-   -- color(11)
-   -- print(vstr(pfrag.l1dir))
-   -- print(vstr(vdir(pfrag.nx,pfrag.ny, pfrag.nz)))
-   -- print(vdot(pfrag.l1dir, vdir(pfrag.nx,pfrag.ny, pfrag.nz)))
-   local color_shades = getShades(pfrag.color)
-   local shadedColorIndex = min(flr(lightRatio * (#color_shades-1))+1, #color_shades)
-   local shadedColor = color_shades[shadedColorIndex]
+   local shadedColorIndex = min(flr(lightRatio * (#white_shades-1))+1, #white_shades)
+   local shadedColor = white_shades[shadedColorIndex]
    --print(shadedColor)
    
    -- pixel render
@@ -543,6 +529,7 @@ function render3d(camera, objects, lights)
 end
 
 -------------------------------------------------------------------------------
+-->8
 -- cube mesh data (from blender .obj export)
 
 function cubemesh()
