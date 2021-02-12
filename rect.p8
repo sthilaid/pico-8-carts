@@ -1,7 +1,8 @@
 pico-8 cartridge // http://www.pico-8.com
 version 29
 __lua__
-
+-- crazy rects
+-- by sthilaid
 function rect(x, y, hw, hh, vx, vy, vangle, col)
    return {x=x, y=y, theta=0, hw=hw, hh=hh, vx=vx, vy=vy, vangle=vangle, col=col}
 end
