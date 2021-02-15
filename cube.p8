@@ -6,93 +6,90 @@ __lua__
 
 -->8
 -- data and global vars
-_pal={0,128,133,5,134,6,135,15,7,3}
-white_shades={0,1,2,3,4,5,6,7,8} -- color indices for light shading from lighting 0->1
-bg_color=9
-interpolateTriangles = false
-performBackfaceCulling = true
-renderMode = 2 -- 0: pixel draw 1: wire mesh 2: triangle draw
-zbuff = {}
-triangles = {}
+g_pal={0,128,133,5,134,6,135,15,7,3}
+g_whiteShades={0,1,2,3,4,5,6,7,8} -- color indices for light shading from lighting 0->1
+g_bgcolor=9
+g_interpolateTriangles = false
+g_performBackfaceCulling = true
+g_renderMode = 2 -- 0: pixel draw 1: wire mesh 2: triangle draw
 
 -- runtime globals
-camera=false
-cube=false
-apple=false
-l1=false
-objects={}
-lights={}
-cubeRotMat=0
-screenMat = 0
-campitch=0
-camyaw=0
-camlen=3
+g_objects={}
+g_lights={}
+g_zbuff = {}
+g_triangles = {}
+g_camera=false
+g_cube=false
+g_apple=false
+g_dirLight=false
+g_cubeRotMat=0
+g_screenMat = 0
+g_campitch=0
+g_camyaw=0
+g_camlen=3
 
 -- runtime debug
-triCount = 0
-totalTriCount = 0
-pixelFragCount = 0
-updateDT=0
-renderStartDT=0
-renderEndDT=0
-geometryDT=0
-rasterDT=0
-pixelDT=0
+g_triCount = 0
+g_totalTriCount = 0
+g_pixelFragCount = 0
+g_renderStartDT=0
+g_renderEndDT=0
+g_geometryDT=0
+g_rasterDT=0
+g_pixelDT=0
 
 -------------------------------------------------------------------------------
 -->8
 -- flow
 
 function _init()
-   camera = makecam(campitch,camyaw,camlen)
+   g_camera = makecam(g_campitch,g_camyaw,g_camlen)
 
-   cube = object(mmult(transmatrix(vpoint(0,0,0)), rotmatrix(0.1,0.1,0)), cubemesh())
-   cube.isVisible = false
-   add(objects, cube)
+   g_cube = object(mmult(transmatrix(vpoint(0,0,0)), rotmatrix(0.1,0.1,0)), cubemesh())
+   g_cube.isVisible = false
+   add(g_objects, g_cube)
 
-   apple = object(rotmatrix(0.05,0.1,0), appleMesh())
-   add(objects, apple)
+   g_apple = object(rotmatrix(0.05,0.1,0), appleMesh())
+   add(g_objects, g_apple)
 
    -- room = object(mmult(transmatrix(vpoint(0,0,0)), rotmatrix(0,0,0)), roommesh())
-   -- add(objects, room)
+   -- add(g_objects, room)
    -- local rabbit = object(matrix(), rabbitMesh())
-   -- add(objects, rabbit)
+   -- add(g_objects, rabbit)
 
-   l1 = dirlight(vnormalize(vdir(-0.75,1,0)), 0.0)
-   add(lights, l1)
+   g_dirLight = dirlight(vnormalize(vdir(-0.75,1,0)), 0.0)
+   add(g_lights, g_dirLight)
 
-   cubeRotMat= rotmatrix(0.25/30, 0.1/30, 0.15/30)
-   screenMat = mmult(transmatrix(vpoint(64, 64, 0.5)), scalematrix(64, 64, 0.5))
+   g_cubeRotMat= rotmatrix(0.25/30, 0.1/30, 0.15/30)
+   g_screenMat = mmult(transmatrix(vpoint(64, 64, 0.5)), scalematrix(64, 64, 0.5))
 end
 
 function _update()
-   if (btn(⬆️)) camlen -= 0.1
-   if (btn(⬇️)) camlen += 0.1
-   if (btn(➡️)) camyaw += 0.01
-   if (btn(⬅️)) camyaw -= 0.01
-   if (btnp(🅾️)) renderMode = (renderMode+1) % 3
+   if (btn(⬆️)) g_camlen -= 0.1
+   if (btn(⬇️)) g_camlen += 0.1
+   if (btn(➡️)) g_camyaw += 0.01
+   if (btn(⬅️)) g_camyaw -= 0.01
+   if (btnp(🅾️)) g_renderMode = (g_renderMode+1) % 3
    if btnp(❎) then
-      cube.isVisible = not cube.isVisible
-      apple.isVisible = not apple.isVisible
+      g_cube.isVisible = not g_cube.isVisible
+      g_apple.isVisible = not g_apple.isVisible
    end
-   camera = makecam(campitch,camyaw,camlen)
+   g_camera = makecam(g_campitch,g_camyaw,g_camlen)
 
    -- local translation = mgettranslation(cube.mat)
-   -- mtranslate(cube.mat, vscale(translation, -1))
-   -- cube.mat = mmult(cubeRotMat, cube.mat)
+   -- mtranslate(g_cube.mat, vscale(translation, -1))
+   -- g_cube.mat = mmult(g_cubeRotMat, cube.mat)
    -- mtranslate(cube.mat, translation)
 
-   if (shouldRotateLight) l1.dir = mapply(rotmatrix(0,0.01,0), l1.dir)
-
-   updateDT = stat(1)
+   if (shouldRotateLight) g_dirLight.dir = mapply(rotmatrix(0,0.01,0), g_dirLight.dir)
 end
 
 function _draw()
-   for i,c in pairs(_pal) do
+   for i,c in pairs(g_pal) do
       pal(i-1,c,1)
    end
-   cls(bg_color)
-   render3d(camera, objects, lights)
+   cls(g_bgcolor)
+   render3d(g_camera, g_objects, g_lights)
    dflush()
 end
 
@@ -103,19 +100,19 @@ debugStrs = {}
 function dprint(str) add(debugStrs, str) end
 function dflush()
    color(15)
-   print("mem:"..(stat(0)/2048).."%".." cpu:"..((renderEndDT-renderStartDT) * 100).."% @"..stat(7).."fps")
-   print("tri: "..triCount.."/"..totalTriCount.." pfrags: "..pixelFragCount)
-   print("g:"..geometryDT.." r:"..rasterDT.." p:"..pixelDT)
+   print("mem:"..(stat(0)/2048).."%".." cpu:"..((g_renderEndDT-g_renderStartDT) * 100).."% @"..stat(7).."fps")
+   print("tri: "..g_triCount.."/"..g_totalTriCount.." pfrags: "..g_pixelFragCount)
+   print("g:"..g_geometryDT.." r:"..g_rasterDT.." p:"..g_pixelDT)
    for s in all(debugStrs) do
       print(s)
    end
    local modeStr = "triangle draw"
-   if (renderMode == 0) modeStr = "pixel draw"
-   if (renderMode == 1) modeStr = "wiremesh draw"
+   if (g_renderMode == 0) modeStr = "pixel draw"
+   if (g_renderMode == 1) modeStr = "wiremesh draw"
    print("mode: "..modeStr, 0, 116)
    print("⬅️➡️⬆️⬇️:cam ❎:mode 🅾️:mesh", 0, 122)
    debugStrs = {}
-   geometryDT, rasterDT, pixelDT, triCount, totalTriCount, pixelFragCount = 0,0,0,0,0,0
+   g_geometryDT, g_rasterDT, g_pixelDT, g_triCount, g_totalTriCount, g_pixelFragCount = 0,0,0,0,0,0
 end
 
 -->8
@@ -383,16 +380,6 @@ function geometryClipping(projVertFrag, clippedTriangles)
    add(clippedTriangles, projVertFrag)
 end
 
-function geometryScreenMapping(vfrag, screenMat)
-   local v = vpoint(vfrag.vx, vfrag.vy, vfrag.vz)
-   local screen_v = mapply(screenMat, v)
-   --dprint("v: "..vstr(v))
-   --dprint("sv: "..vstr(screen_v))
-   vfrag.vx = screen_v[1]
-   vfrag.vy = screen_v[2]
-   vfrag.vz = screen_v[3]
-end
-
 function processGeometries(cam, objects, lights)
    for l in all(lights) do
       l.campos = mapply(cam, l.pos)
@@ -402,7 +389,7 @@ function processGeometries(cam, objects, lights)
       if (not obj.isVisible) goto nextobj
       local mesh = obj.mesh
       local processedVerticesCache = {}
-      local projectionMatrix = mmult(screenMat, mmult(cam, obj.mat))
+      local projectionMatrix = mmult(g_screenMat, mmult(cam, obj.mat))
       for t in all(mesh.tris) do
          local startDT = stat(1)
          local vfrags= {}
@@ -418,23 +405,23 @@ function processGeometries(cam, objects, lights)
          end
          
          -- backface culling
-         if (not performBackfaceCulling) or triangleSignedArea(vfrags) < 0 then
-            triCount += 1
-            geometryDT += stat(1) - startDT
+         if (not g_performBackfaceCulling) or triangleSignedArea(vfrags) < 0 then
+            g_triCount += 1
+            g_geometryDT += stat(1) - startDT
 
-            if (renderMode == 0) rasterizeTriangle(vfrags)
-            if (renderMode == 1) rasterizeTriangleToEdges(vfrags)
-            if (renderMode == 2) storeTriangle(vfrags)
+            if (g_renderMode == 0) rasterizeTriangle(vfrags)
+            if (g_renderMode == 1) rasterizeTriangleToEdges(vfrags)
+            if (g_renderMode == 2) storeTriangle(vfrags)
          else
-            geometryDT += stat(1) - startDT
+            g_geometryDT += stat(1) - startDT
          end
-         totalTriCount += 1
+         g_totalTriCount += 1
       end
       ::nextobj::
    end
-   if renderMode == 2 then -- triangle draw mode
-      qsort(triangles,1,#triangles,'depth',lt)
-      for t in all(triangles) do
+   if g_renderMode == 2 then -- triangle draw mode
+      qsort(g_triangles,1,#g_triangles,'depth',lt)
+      for t in all(g_triangles) do
          drawTriangle(t)
       end
    end
@@ -515,7 +502,7 @@ function rasterizeTriangle(vfrags)
          --dprint("("..x..","..y.."): "..edgeValues[1]..","..edgeValues[2]..","..edgeValues[3])
          if isInside then
             local pfrag = false
-            if interpolateTriangles then
+            if g_interpolateTriangles then
                pfrag = interpolateTri(x, y, vfrags[1], vfrags[2], vfrags[3], edgeValues)
             else
                local v = vpoint(x, y, vfrags[1].vz)
@@ -525,7 +512,7 @@ function rasterizeTriangle(vfrags)
                pfrag.l1type = vfrags[1].l1type
             end
 
-            rasterDT += stat(1) - pixelStartDT
+            g_rasterDT += stat(1) - pixelStartDT
             processPixelFragment(pfrag)
          end
       end
@@ -548,29 +535,29 @@ function buffGetValue(buf, x, y) return buf[y*128+x] end
 function buffSetValue(buf, x, y, val) buf[y*128+x] = val end
 function processPixelFragment(pfrag)
    local startDT = stat(1)
-   pixelFragCount += 1
+   g_pixelFragCount += 1
 
-   local currentZValue = buffGetValue(zbuff, pfrag.vx, pfrag.vy)
+   local currentZValue = buffGetValue(g_zbuff, pfrag.vx, pfrag.vy)
    if (currentZValue and pfrag.vz < currentZValue) return
-   buffSetValue(zbuff, pfrag.vx, pfrag.vy, pfrag.vz)
+   buffSetValue(g_zbuff, pfrag.vx, pfrag.vy, pfrag.vz)
    
    -- lighting
    local lightRatio = 1.0
    if pfrag.l1type == 0 then
       lightRatio = clamp(0,1,max(0,vdot(pfrag.l1dir, vdir(pfrag.nx,pfrag.ny, pfrag.nz))))
    end
-   local shadedColorIndex = min(flr(lightRatio * (#white_shades-1))+1, #white_shades)
-   local shadedColor = white_shades[shadedColorIndex]
+   local shadedColorIndex = min(flr(lightRatio * (#g_whiteShades-1))+1, #g_whiteShades)
+   local shadedColor = g_whiteShades[shadedColorIndex]
    --print(shadedColor)
    
    -- pixel render
    pset(pfrag.vx, pfrag.vy, shadedColor)
-   pixelDT += stat(1) - startDT
+   g_pixelDT += stat(1) - startDT
 end
 
 function storeTriangle(vfrags)
    vfrags.depth = max(max(vfrags[1].vz, vfrags[2].vz), vfrags[3].vz)
-   add(triangles,vfrags)
+   add(g_triangles,vfrags)
 end
 
 function drawTriangle(vfrags)
@@ -583,18 +570,18 @@ function drawTriangle(vfrags)
    if pfrag.l1type == 0 then
       lightRatio = clamp(0,1,max(0,vdot(pfrag.l1dir, vdir(pfrag.nx,pfrag.ny, pfrag.nz))))
    end
-   local shadedColorIndex = min(flr(lightRatio * (#white_shades-1))+1, #white_shades)
-   local shadedColor = white_shades[shadedColorIndex]
+   local shadedColorIndex = min(flr(lightRatio * (#g_whiteShades-1))+1, #g_whiteShades)
+   local shadedColor = g_whiteShades[shadedColorIndex]
    
    trifill(p1x,p1y,p2x,p2y,p3x,p3y,shadedColor)
 end
 
 function render3d(camera, objects, lights)
-   renderStartDT = stat(1)
-   zbuff, triangles = {}, {}
+   g_renderStartDT = stat(1)
+   g_zbuff, g_triangles = {}, {}
    processGeometries(camera, objects, lights)
    
-   renderEndDT = stat(1)
+   g_renderEndDT = stat(1)
 end
 
 -------------------------------------------------------------------------------
