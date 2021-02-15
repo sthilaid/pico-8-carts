@@ -1,15 +1,19 @@
 pico-8 cartridge // http://www.pico-8.com
 version 29
 __lua__
--- RealTime Renderering
+-- realtime renderering
 -- by sthilaid
 
 -->8
 -- data and global vars
-_pal={0,128,133,5,134,6,135,15,7}
+_pal={0,128,133,5,134,6,135,15,7,3}
 white_shades={0,1,2,3,4,5,6,7,8} -- color indices for light shading from lighting 0->1
-bg_color=13
+bg_color=9
 interpolateTriangles = false
+performBackfaceCulling = true
+renderMode = 2 -- 0: pixel draw 1: wire mesh 2: triangle draw
+zbuff = {}
+triangles = {}
 
 -- runtime globals
 camera=false
@@ -23,10 +27,10 @@ screenMat = 0
 campitch=0
 camyaw=0
 camlen=3
-shouldRotateLight=true
 
 -- runtime debug
 triCount = 0
+totalTriCount = 0
 pixelFragCount = 0
 updateDT=0
 renderStartDT=0
@@ -39,9 +43,6 @@ pixelDT=0
 -->8
 -- flow
 
-function makecam(pitch,yaw, len)
-   return mmult(mmult(perspective(-3, 3, 3, -3, -2, -100), transmatrix(vpoint(0,0,len))), rotmatrix(pitch,yaw,0))
-end
 function _init()
    camera = makecam(campitch,camyaw,camlen)
 
@@ -52,12 +53,12 @@ function _init()
    apple = object(rotmatrix(0.05,0.1,0), appleMesh())
    add(objects, apple)
 
-   --room = object(mmult(transmatrix(vpoint(0,0,0)), rotmatrix(0,0,0)), roommesh())
-   --add(objects, room)
+   -- room = object(mmult(transmatrix(vpoint(0,0,0)), rotmatrix(0,0,0)), roommesh())
+   -- add(objects, room)
    -- local rabbit = object(matrix(), rabbitMesh())
    -- add(objects, rabbit)
 
-   l1 = dirlight(vnormalize(vdir(0,0,-1)), 0.0)
+   l1 = dirlight(vnormalize(vdir(-0.75,1,0)), 0.0)
    add(lights, l1)
 
    cubeRotMat= rotmatrix(0.25/30, 0.1/30, 0.15/30)
@@ -69,7 +70,7 @@ function _update()
    if (btn(⬇️)) camlen += 0.1
    if (btn(➡️)) camyaw += 0.01
    if (btn(⬅️)) camyaw -= 0.01
-   if (btnp(🅾️)) shouldRotateLight = not shouldRotateLight
+   if (btnp(🅾️)) renderMode = (renderMode+1) % 3
    if btnp(❎) then
       cube.isVisible = not cube.isVisible
       apple.isVisible = not apple.isVisible
@@ -87,8 +88,6 @@ function _update()
 end
 
 function _draw()
-   srand(12345)
-   
    for i,c in pairs(_pal) do
       pal(i-1,c,1)
    end
@@ -104,15 +103,19 @@ debugStrs = {}
 function dprint(str) add(debugStrs, str) end
 function dflush()
    color(15)
-   print("mem:"..(stat(0)/2048).."%")
-   print("tri: "..triCount.." pfrags: "..pixelFragCount)
+   print("mem:"..(stat(0)/2048).."%".." cpu:"..((renderEndDT-renderStartDT) * 100).."% @"..stat(7).."fps")
+   print("tri: "..triCount.."/"..totalTriCount.." pfrags: "..pixelFragCount)
    print("g:"..geometryDT.." r:"..rasterDT.." p:"..pixelDT)
    for s in all(debugStrs) do
       print(s)
    end
-   print("⬅️➡️⬆️⬇️:cam ❎:mesh 🅾️:lightrot", 0, 122)
+   local modeStr = "triangle draw"
+   if (renderMode == 0) modeStr = "pixel draw"
+   if (renderMode == 1) modeStr = "wiremesh draw"
+   print("mode: "..modeStr, 0, 116)
+   print("⬅️➡️⬆️⬇️:cam ❎:mode 🅾️:mesh", 0, 122)
    debugStrs = {}
-   geometryDT, rasterDT, pixelDT, triCount, pixelFragCount = 0,0,0,0,0
+   geometryDT, rasterDT, pixelDT, triCount, totalTriCount, pixelFragCount = 0,0,0,0,0,0
 end
 
 -->8
@@ -159,7 +162,7 @@ function pstr(p)        return "<"..p[1]..","..p[2]..">" end
 
 -------------------------------------------------------------------------------
 -- floats
-
+function abs(x) if x<0 then return -x else return x end end
 function sign(x)
    if x < 0 then    return -1
    else             return 1
@@ -195,30 +198,30 @@ end
 -------------------------------------------------------------------------------
 -- matrix
 
-function matrix() return {{1,0,0,0}, {0,1,0,0}, {0,0,1,0}, {0,0,0,1}} end
+function matrix() return {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1} end
 function rotmatrix(x,y,z) -- ammount to rotate around each axis
    function rot_x(xangle)
       local m = matrix()
-      m[2][2] = cos(xangle)
-      m[2][3] = -sin(xangle)
-      m[3][2] = sin(xangle)
-      m[3][3] = cos(xangle)
+      m[6] = cos(xangle)
+      m[7] = -sin(xangle)
+      m[10] = sin(xangle)
+      m[11] = cos(xangle)
       return m
    end
    function rot_y(yangle)
       local m = matrix()
-      m[1][1] = cos(yangle)
-      m[1][3] = sin(yangle)
-      m[3][1] = -sin(yangle)
-      m[3][3] = cos(yangle)
+      m[1] = cos(yangle)
+      m[3] = sin(yangle)
+      m[9] = -sin(yangle)
+      m[11] = cos(yangle)
       return m
    end
    function rot_z(zangle)
       local m = matrix()
-      m[1][1] = cos(zangle)
-      m[1][2] = -sin(zangle)
-      m[2][1] = sin(zangle)
-      m[2][2] = cos(yangle)
+      m[1] = cos(zangle)
+      m[2] = -sin(zangle)
+      m[5] = sin(zangle)
+      m[6] = cos(yangle)
       return m
    end
 
@@ -226,48 +229,48 @@ function rotmatrix(x,y,z) -- ammount to rotate around each axis
 end
 function transmatrix(t)
    local m = matrix()
-   m[1][4] = t[1]
-   m[2][4] = t[2]
-   m[3][4] = t[3]
+   m[4] = t[1]
+   m[8] = t[2]
+   m[12]= t[3]
    return m
 end
 function scalematrix(sx, sy, sz)
    local m = matrix()
-   m[1][1] = sx
-   m[2][2] = sy
-   m[3][3] = sz
-   m[4][4] = 1
+   m[1] = sx
+   m[6] = sy
+   m[11] = sz
+   m[16] = 1
    return m
 end
 function mgettranslation(m)
-   return vpoint(m[1][4], m[2][4], m[3][4])
+   return vpoint(m[4], m[8], m[12])
 end
 function mtranslate(m, t)
-   m[1][4] += t[1]
-   m[2][4] += t[2]
-   m[3][4] += t[3]
+   m[4] += t[1]
+   m[8] += t[2]
+   m[12] += t[3]
 end
 function ortho(l, r, t, b, n, f)
    local m = matrix()
-   m[1][1] = 2 / (r - l)
-   m[2][2] = 2 / (t - b)
-   m[3][3] = 2 / (f - n)
-   m[1][4] = -(r+l) / (r-l)
-   m[2][4] = -(t+b) / (t-b)
-   m[3][4] = -(f+n) / (f-n)
-   m[4][4] = 1
+   m[1] = 2 / (r - l)
+   m[6] = 2 / (t - b)
+   m[11] = 2 / (f - n)
+   m[4] = -(r+l) / (r-l)
+   m[8] = -(t+b) / (t-b)
+   m[12] = -(f+n) / (f-n)
+   m[16] = 1
    return m
 end
 function perspective(l, r, t, b, n, f)
    local m = matrix()
-   m[1][1] = 2*n / (r - l)
-   m[2][2] = 2*n / (t - b)
-   m[3][3] = (f+n) / (f-n)
-   m[1][3] = -(r+l) / (r-l)
-   m[2][3] = -(t+b) / (t-b)
-   m[3][4] = -2*f*n / (f-n)
-   m[4][3] = 1
-   m[4][4] = 0
+   m[1] = 2*n / (r - l)
+   m[6] = 2*n / (t - b)
+   m[11] = (f+n) / (f-n)
+   m[3] = -(r+l) / (r-l)
+   m[7] = -(t+b) / (t-b)
+   m[12] = -2*f*n / (f-n)
+   m[15] = 1
+   m[16] = 0
    return m
 end
 -- function perspective2(fovy, aspect, near, far)
@@ -284,9 +287,9 @@ function mmult(m1, m2)
       for j=1,4 do
          local m_ij = 0
          for r=1,4 do
-            m_ij += m1[i][r] * m2[r][j]
+            m_ij += m1[(i-1)*4+r] * m2[(r-1)*4+j]
          end
-         m[i][j] = m_ij
+         m[(i-1)*4+j] = m_ij
       end
    end
    return m
@@ -297,7 +300,7 @@ function mapply(m, v)
    for i=1,4 do
       res[i] = 0
       for j=1,4 do
-         res[i] += m[i][j] * v[j]
+         res[i] += m[(i-1)*4+j] * v[j]
       end
    end
    return res
@@ -319,6 +322,10 @@ function meshdata(vertices, normals, triangles, cullBackface)
            cullBackface=cullBackface}
 end
 function object(mat, mesh) return {mat=mat, mesh=mesh, isVisible=true} end
+
+function makecam(pitch,yaw, len)
+   return mmult(mmult(perspective(-3, 3, 3, -3, -2, -100), transmatrix(vpoint(0,0,len))), rotmatrix(pitch,yaw,0))
+end
 
 -- lights: 0-directional, 1-point
 function dirlight(dir, r0) return {type=0, pos=vpoint(0,0,0), dir=dir, r0=r0, campos=0, camdir=0} end
@@ -392,13 +399,13 @@ function processGeometries(cam, objects, lights)
       l.camdir = mapply(cam, l.dir)
    end
    for obj in all(objects) do
-      if (not obj.isVisible) goto continue
+      if (not obj.isVisible) goto nextobj
       local mesh = obj.mesh
       local processedVerticesCache = {}
       local projectionMatrix = mmult(screenMat, mmult(cam, obj.mat))
       for t in all(mesh.tris) do
          local startDT = stat(1)
-         local processedTriangleFrags= {}
+         local vfrags= {}
          local clippedTriangleFrags = {}
          local triangleColor = t[4]
          for tindex=1,3 do
@@ -407,17 +414,40 @@ function processGeometries(cam, objects, lights)
             local vFrag     = geometryVertexShading(projectionMatrix, mesh, v_index, n_index,
                                                     processedVerticesCache, lights, triangleColor)
             --dprint("pv: "..vstr(vFrag.n))
-            add(processedTriangleFrags, vFrag)
+            add(vfrags, vFrag)
          end
-         triCount += 1
-         geometryDT += stat(1) - startDT
-         rasterizeTriangle(processedTriangleFrags)
+         
+         -- backface culling
+         if (not performBackfaceCulling) or triangleSignedArea(vfrags) < 0 then
+            triCount += 1
+            geometryDT += stat(1) - startDT
+
+            if (renderMode == 0) rasterizeTriangle(vfrags)
+            if (renderMode == 1) rasterizeTriangleToEdges(vfrags)
+            if (renderMode == 2) storeTriangle(vfrags)
+         else
+            geometryDT += stat(1) - startDT
+         end
+         totalTriCount += 1
       end
-      ::continue::
+      ::nextobj::
+   end
+   if renderMode == 2 then -- triangle draw mode
+      qsort(triangles,1,#triangles,'depth',lt)
+      for t in all(triangles) do
+         drawTriangle(t)
+      end
    end
 end
 
-function computeEdgeParams(p1, p2) return {a=-(p2[2]-p1[2]), b=(p2[1]-p1[1]), c=(p2[2]-p1[2])*p1[1] - (p2[1]-p1[1])*p1[2]} end
+function triangleSignedArea(vfrags)
+   -- sign of the z component of the cross product of the edge vectors (p2-p1 and p3-p1)
+   local p1x, p1y = vfrags[1].vx, vfrags[1].vy
+   local p2x, p2y = vfrags[2].vx, vfrags[2].vy
+   local p3x, p3y = vfrags[3].vx, vfrags[3].vy
+   return -p1y*p2x+p1x*p2y+p1y*p3x-p2y*p3x-p1x*p3y+p2x*p3y
+end
+function computeEdgeParams(p1x,p1y,p2x,p2y) return {a=-(p2y-p1y), b=(p2x-p1x), c=(p2y-p1y)*p1x - (p2x-p1x)*p1y} end
 function edgeSign(px,py,a,b,c) return a*px + b*py + c end
 function baryInterpVertex(w,u,v,v1,v2,v3) return vadd(vadd(vscale(v1, w), vscale(v2, u)), vscale(v3, v)) end
 function baryInterpPoint(w,u,v,v1,v2,v3) return padd(padd(pscale(v1, w), pscale(v2, u)), pscale(v3, v)) end
@@ -454,19 +484,17 @@ function interpolateTri(x, y, vfrag1, vfrag2, vfrag3, edgeValues)
    return pfrag
 end
 
-function rasterizeTriangle(clippedTriangleFrags)
-   local tricol = clippedTriangleFrags[1].color --rnd(16)
-   local p1 = vpoint(clippedTriangleFrags[1].vx, clippedTriangleFrags[1].vy, clippedTriangleFrags[1].vz)
-   local p2 = vpoint(clippedTriangleFrags[2].vx, clippedTriangleFrags[2].vy, clippedTriangleFrags[2].vz)
-   local p3 = vpoint(clippedTriangleFrags[3].vx, clippedTriangleFrags[3].vy, clippedTriangleFrags[3].vz)
-
-   -- todo backface culling
-   
-   local edgeParams = {computeEdgeParams(p1, p2), computeEdgeParams(p2, p3), computeEdgeParams(p3, p1)}
-   local pmin_x = flr(min(min(p1[1], p2[1]), p3[1]))
-   local pmin_y = flr(min(min(p1[2], p2[2]), p3[2]))
-   local pmax_x = flr(max(max(p1[1], p2[1]), p3[1]))
-   local pmax_y = flr(max(max(p1[2], p2[2]), p3[2]))
+function rasterizeTriangle(vfrags)
+   local p1x,p1y = vfrags[1].vx, vfrags[1].vy
+   local p2x,p2y = vfrags[2].vx, vfrags[2].vy
+   local p3x,p3y = vfrags[3].vx, vfrags[3].vy
+   local edgeParams = {computeEdgeParams(p1x,p1y, p2x,p2y),
+                       computeEdgeParams(p2x,p2y, p3x,p3y),
+                       computeEdgeParams(p3x,p3y, p1x,p1y)}
+   local pmin_x = flr(min(min(p1x, p2x), p3x))
+   local pmin_y = flr(min(min(p1y, p2y), p3y))
+   local pmax_x = flr(max(max(p1x, p2x), p3x))
+   local pmax_y = flr(max(max(p1y, p2y), p3y))
    --dprint("min: "..pmin_x..","..pmin_y.." max: "..pmax_x..","..pmax_y)
    --dprint("params: a:"..edgeParams[1].a.."b: "..edgeParams[1].b.."c: "..edgeParams[1].c)
    for x=pmin_x, pmax_x do
@@ -476,8 +504,8 @@ function rasterizeTriangle(clippedTriangleFrags)
          local edgeValues = {}
          for e=1,3 do
             edgeValues[e] = edgeSign(x,y, edgeParams[e].a, edgeParams[e].b, edgeParams[e].c)
+            -- can use this instead if we don't want backface culling at the pixel level
             --isInside = e==1 or edgeValues[e] == 0 or sign(edgeValues[e]) == sign(edgeValues[e-1])
-            -- hack while i figure how to properly do backface culling at the tri level
             isInside = isInside and edgeValues[e] <= 0
             if not isInside then
                break
@@ -488,13 +516,13 @@ function rasterizeTriangle(clippedTriangleFrags)
          if isInside then
             local pfrag = false
             if interpolateTriangles then
-               pfrag = interpolateTri(x, y, clippedTriangleFrags[1], clippedTriangleFrags[2], clippedTriangleFrags[3], edgeValues)
+               pfrag = interpolateTri(x, y, vfrags[1], vfrags[2], vfrags[3], edgeValues)
             else
-               local v = vpoint(x, y, clippedTriangleFrags[1].vz)
-               local n = vdir(clippedTriangleFrags[1].nx, clippedTriangleFrags[1].ny, clippedTriangleFrags[1].nz)
+               local v = vpoint(x, y, vfrags[1].vz)
+               local n = vdir(vfrags[1].nx, vfrags[1].ny, vfrags[1].nz)
                pfrag = fragment(v, n)
-               pfrag.l1dir  = clippedTriangleFrags[1].l1dir
-               pfrag.l1type = clippedTriangleFrags[1].l1type
+               pfrag.l1dir  = vfrags[1].l1dir
+               pfrag.l1type = vfrags[1].l1type
             end
 
             rasterDT += stat(1) - pixelStartDT
@@ -504,10 +532,28 @@ function rasterizeTriangle(clippedTriangleFrags)
    end
 end
 
+function rasterizeEdge(p1x,p1y,p1z,p2x,p2y,p2z)
+   line(p1x,p1y,p2x,p2y,8)
+end
+function rasterizeTriangleToEdges(vfrags)
+   local p1x,p1y,p1z = vfrags[1].vx, vfrags[1].vy, vfrags[1].vz
+   local p2x,p2y,p2z = vfrags[2].vx, vfrags[2].vy, vfrags[2].vz
+   local p3x,p3y,p3z = vfrags[3].vx, vfrags[3].vy, vfrags[3].vz
+   rasterizeEdge(p1x,p1y,p1z,p2x,p2y,p2z)
+   rasterizeEdge(p2x,p2y,p2z,p3x,p3y,p3z)
+   rasterizeEdge(p3x,p3y,p3z,p1x,p1y,p1z)
+end
+
+function buffGetValue(buf, x, y) return buf[y*128+x] end
+function buffSetValue(buf, x, y, val) buf[y*128+x] = val end
 function processPixelFragment(pfrag)
    local startDT = stat(1)
    pixelFragCount += 1
 
+   local currentZValue = buffGetValue(zbuff, pfrag.vx, pfrag.vy)
+   if (currentZValue and pfrag.vz < currentZValue) return
+   buffSetValue(zbuff, pfrag.vx, pfrag.vy, pfrag.vz)
+   
    -- lighting
    local lightRatio = 1.0
    if pfrag.l1type == 0 then
@@ -522,9 +568,32 @@ function processPixelFragment(pfrag)
    pixelDT += stat(1) - startDT
 end
 
+function storeTriangle(vfrags)
+   vfrags.depth = max(max(vfrags[1].vz, vfrags[2].vz), vfrags[3].vz)
+   add(triangles,vfrags)
+end
+
+function drawTriangle(vfrags)
+   local p1x,p1y,p1z = vfrags[1].vx, vfrags[1].vy, vfrags[1].vz
+   local p2x,p2y,p2z = vfrags[2].vx, vfrags[2].vy, vfrags[2].vz
+   local p3x,p3y,p3z = vfrags[3].vx, vfrags[3].vy, vfrags[3].vz
+
+   local pfrag=vfrags[1]
+   local lightRatio = 1.0
+   if pfrag.l1type == 0 then
+      lightRatio = clamp(0,1,max(0,vdot(pfrag.l1dir, vdir(pfrag.nx,pfrag.ny, pfrag.nz))))
+   end
+   local shadedColorIndex = min(flr(lightRatio * (#white_shades-1))+1, #white_shades)
+   local shadedColor = white_shades[shadedColorIndex]
+   
+   trifill(p1x,p1y,p2x,p2y,p3x,p3y,shadedColor)
+end
+
 function render3d(camera, objects, lights)
    renderStartDT = stat(1)
+   zbuff, triangles = {}, {}
    processGeometries(camera, objects, lights)
+   
    renderEndDT = stat(1)
 end
 
@@ -1257,6 +1326,66 @@ end
 --       -- backface
 --       true)
 -- end
+-------------------------------------------------------------------------------
+-->8
+-- borrowed
+
+-- trifill by @p01
+function p01_trapeze_h(l,r,lt,rt,y0,y1)
+   lt,rt=(lt-l)/(y1-y0),(rt-r)/(y1-y0)
+   if(y0<0)l,r,y0=l-y0*lt,r-y0*rt,0 
+   for y0=y0,min(y1,128) do
+      rectfill(l,y0,r,y0)
+      l+=lt
+      r+=rt
+   end
+   end
+function p01_trapeze_w(t,b,tt,bt,x0,x1)
+   tt,bt=(tt-t)/(x1-x0),(bt-b)/(x1-x0)
+   if(x0<0)t,b,x0=t-x0*tt,b-x0*bt,0 
+   for x0=x0,min(x1,128) do
+      rectfill(x0,t,x0,b)
+      t+=tt
+      b+=bt
+   end
+   end
+
+function trifill(x0,y0,x1,y1,x2,y2,c)
+   color(c)
+   if(y1<y0)x0,x1,y0,y1=x1,x0,y1,y0
+   if(y2<y0)x0,x2,y0,y2=x2,x0,y2,y0
+   if(y2<y1)x1,x2,y1,y2=x2,x1,y2,y1
+   if max(x2,max(x1,x0))-min(x2,min(x1,x0)) > y2-y0 then
+      local col=x0+(x2-x0)/(y2-y0)*(y1-y0)
+      p01_trapeze_h(x0,x0,x1,col,y0,y1)
+      p01_trapeze_h(x1,col,x2,x2,y1,y2)
+   else
+      if(x1<x0)x0,x1,y0,y1=x1,x0,y1,y0
+      if(x2<x0)x0,x2,y0,y2=x2,x0,y2,y0
+      if(x2<x1)x1,x2,y1,y2=x2,x1,y2,y1
+      local col=y0+(y2-y0)/(x2-x0)*(x1-x0)
+      p01_trapeze_w(y0,y0,y1,col,x0,x1)
+      p01_trapeze_w(y1,col,y2,y2,x1,x2)
+      end
+   end
+
+--quicksort from three-d by jimmi
+function gt(_x,_y) return (_x > _y) end
+function lt(_x,_y) return (_x < _y) end
+function qsort(_data,_lo,_hi,_key,_cmp)
+  _cmp = _cmp or gt
+  if _lo < _hi then
+    local pivot, p = _data[_hi][_key], _lo
+    for j=_lo,_hi-1 do
+      if _cmp(_data[j][_key], pivot) then
+        _data[p], _data[j], p = _data[j], _data[p], p+1
+      end
+    end
+    _data[p], _data[_hi] = _data[_hi], _data[p]
+    qsort(_data,_lo,p-1,_key,_cmp)
+    qsort(_data,p+1,_hi,_key,_cmp)
+  end
+end
 
 __gfx__
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
