@@ -22,6 +22,7 @@ g_camera=false
 g_cube=false
 g_apple=false
 g_dirLight=false
+g_pointLight=false
 g_cubeRotMat=0
 g_screenMat = 0
 g_campitch=0
@@ -57,8 +58,10 @@ function _init()
    -- local rabbit = object(matrix(), rabbitMesh())
    -- add(g_objects, rabbit)
 
-   g_dirLight = dirlight(vnormalize(vdir(-0.75,1,0)), 0.0)
-   add(g_lights, g_dirLight)
+   --g_dirLight = dirlight(vnormalize(vdir(-0.75,1,0)), 0.7)
+   --add(g_lights, g_dirLight)
+   g_pointLight = pointlight(vpoint(-5,0,0), 4)
+   add(g_lights, g_pointLight)
 
    g_cubeRotMat= rotmatrix(0.25/30, 0.1/30, 0.15/30)
    g_screenMat = mmult(transmatrix(vpoint(64, 64, 0.5)), scalematrix(64, 64, 0.5))
@@ -82,6 +85,7 @@ function _update()
    -- mtranslate(cube.mat, translation)
 
    if (shouldRotateLight) g_dirLight.dir = mapply(rotmatrix(0,0.01,0), g_dirLight.dir)
+   g_pointLight.pos = mapply(rotmatrix(0,0.01,0), g_pointLight.pos)
 end
 
 function _draw()
@@ -178,7 +182,7 @@ function vpoint(x,y,z) return {x, y, z, 1} end
 function vdir(x,y,z) return {x, y, z, 0} end
 function vmakedir(v) return {v[1], v[2], v[3], 0} end
 function vadd(v1, v2) return {v1[1]+v2[1], v1[2]+v2[2], v1[3]+v2[3], v1[4]+v2[4]} end
-function vsub(v1, v2) return {v1[1]-v2[1], v1[2]-v2[2], v1[3]-v2[3], v1.w} end
+function vsub(v1, v2) return {v1[1]-v2[1], v1[2]-v2[2], v1[3]-v2[3], v1[4]+v2[4]} end
 function vscale(v1, s) return {v1[1]*s, v1[2]*s, v1[3]*s, v1[4]*s} end
 function vdot(v1, v2) return v1[1]*v2[1] + v1[2]*v2[2] + v1[3]*v2[3] end
 function vnorm(v) return sqrt(vdot(v,v)) end
@@ -325,8 +329,8 @@ function makecam(pitch,yaw, len)
 end
 
 -- lights: 0-directional, 1-point
-function dirlight(dir, r0) return {type=0, pos=vpoint(0,0,0), dir=dir, r0=r0, campos=0, camdir=0} end
-function pointlight(pos, r0) return {type=1, pos=pos, dir=vdir(0,0,0), r0=r0, campos=0, camdir=0} end
+function dirlight(dir, r0) return {type=0, pos=vpoint(0,0,0), dir=dir, r0=r0} end
+function pointlight(pos, r0) return {type=1, pos=pos, dir=vdir(0,0,0), r0=r0} end
 
 function fragment(v, n)
    return {vx=v[1], vy=v[2], vz=v[3],
@@ -335,6 +339,7 @@ function fragment(v, n)
            l1dir=false,
            l1type=false,
            l1r0=false,
+           l1r=false
    }
 end
 
@@ -347,14 +352,16 @@ function geometryVertexShading(projectionMatrix, mesh, v_index, n_index,
    local v = mesh.verts[v_index]
 
    -- lighting
-   local l1dir  = false
-   local l1type = false
-   local l1r0   = false
+   local l1dir,l1type,l1r0,l1r  = false,false,false,false
 
    local l1 = lights[1]
    if l1 then
-      if (l1.type == 0) l1dir = l1.dir
-      if (l1.type == 1) l1dir = vnormalize(vsub(l1.pos, v))
+      if l1.type == 0 then l1dir = l1.dir
+      elseif (l1.type == 1) then
+         local deltaToLight = vsub(l1.pos, v)
+         l1r    = max(0.001, vnorm(deltaToLight))
+         l1dir  = vscale(deltaToLight, 1/l1r)
+      end
       l1type= l1.type
       l1r0  = l1.r0
    end
@@ -372,6 +379,7 @@ function geometryVertexShading(projectionMatrix, mesh, v_index, n_index,
    vfrag.l1dir  = l1dir
    vfrag.l1type = l1type
    vfrag.l1r0   = l1r0
+   vfrag.l1r    = l1r
    return vfrag
 end
 
@@ -381,10 +389,6 @@ function geometryClipping(projVertFrag, clippedTriangles)
 end
 
 function processGeometries(cam, objects, lights)
-   for l in all(lights) do
-      l.campos = mapply(cam, l.pos)
-      l.camdir = mapply(cam, l.dir)
-   end
    for obj in all(objects) do
       if (not obj.isVisible) goto nextobj
       local mesh = obj.mesh
@@ -510,6 +514,8 @@ function rasterizeTriangle(vfrags)
                pfrag = fragment(v, n)
                pfrag.l1dir  = vfrags[1].l1dir
                pfrag.l1type = vfrags[1].l1type
+               pfrag.l1r0   = vfrags[1].l1r0
+               pfrag.l1r    = vfrags[1].l1r
             end
 
             g_rasterDT += stat(1) - pixelStartDT
@@ -531,6 +537,18 @@ function rasterizeTriangleToEdges(vfrags)
    rasterizeEdge(p3x,p3y,p3z,p1x,p1y,p1z)
 end
 
+function getShadedColor(ltype, ldir, lr0, lr, nx, ny, nz)
+   local lightRatio = 1.0
+   if ltype == 0 then
+      lightRatio = clamp(0,1,max(0,lr0 * vdot(ldir, vdir(nx,ny,nz))))
+   elseif ltype == 1 then
+      lightRatio = clamp(0,1,max(0, vdot(ldir, vdir(nx,ny,nz)) * lr0*lr0 / max(lr*lr, 0.0001)))
+   end
+   local shadedColorIndex = min(flr(lightRatio * (#g_whiteShades-1))+1, #g_whiteShades)
+   local shadedColor = g_whiteShades[shadedColorIndex]
+   return shadedColor
+end
+
 function buffGetValue(buf, x, y) return buf[y*128+x] end
 function buffSetValue(buf, x, y, val) buf[y*128+x] = val end
 function processPixelFragment(pfrag)
@@ -542,12 +560,7 @@ function processPixelFragment(pfrag)
    buffSetValue(g_zbuff, pfrag.vx, pfrag.vy, pfrag.vz)
    
    -- lighting
-   local lightRatio = 1.0
-   if pfrag.l1type == 0 then
-      lightRatio = clamp(0,1,max(0,vdot(pfrag.l1dir, vdir(pfrag.nx,pfrag.ny, pfrag.nz))))
-   end
-   local shadedColorIndex = min(flr(lightRatio * (#g_whiteShades-1))+1, #g_whiteShades)
-   local shadedColor = g_whiteShades[shadedColorIndex]
+   local shadedColor = getShadedColor(pfrag.l1type, pfrag.l1dir, pfrag.l1r0, pfrag.l1r, pfrag.nx,pfrag.ny, pfrag.nz)
    --print(shadedColor)
    
    -- pixel render
@@ -566,13 +579,7 @@ function drawTriangle(vfrags)
    local p3x,p3y,p3z = vfrags[3].vx, vfrags[3].vy, vfrags[3].vz
 
    local pfrag=vfrags[1]
-   local lightRatio = 1.0
-   if pfrag.l1type == 0 then
-      lightRatio = clamp(0,1,max(0,vdot(pfrag.l1dir, vdir(pfrag.nx,pfrag.ny, pfrag.nz))))
-   end
-   local shadedColorIndex = min(flr(lightRatio * (#g_whiteShades-1))+1, #g_whiteShades)
-   local shadedColor = g_whiteShades[shadedColorIndex]
-   
+   local shadedColor = getShadedColor(pfrag.l1type, pfrag.l1dir, pfrag.l1r0, pfrag.l1r, pfrag.nx,pfrag.ny,pfrag.nz)
    trifill(p1x,p1y,p2x,p2y,p3x,p3y,shadedColor)
 end
 
