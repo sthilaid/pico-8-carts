@@ -9,7 +9,7 @@ __lua__
 g_pal={0,128,133,5,134,6,135,15,7,3}
 g_whiteShades={0,1,2,3,4,5,6,7,8} -- color indices for light shading from lighting 0->1
 g_bgcolor=9
-g_interpolateTriangles = false
+g_interpolateTriangles = true
 g_performBackfaceCulling = true
 g_renderMode = 2 -- 0: pixel draw 1: wire mesh 2: triangle draw
 
@@ -28,6 +28,7 @@ g_screenMat = 0
 g_campitch=0
 g_camyaw=0
 g_camlen=3
+g_visibleMeshIndex = 0
 
 -- runtime debug
 g_triCount = 0
@@ -53,13 +54,16 @@ function _init()
    g_apple = object(rotmatrix(0.05,0.1,0), appleMesh())
    add(g_objects, g_apple)
 
+   local plane = add(g_objects, object(matrix(), planemesh()))
+   plane.isVisible =  false
+
    -- room = object(mmult(transmatrix(vpoint(0,0,0)), rotmatrix(0,0,0)), roommesh())
    -- add(g_objects, room)
    -- local rabbit = object(matrix(), rabbitMesh())
    -- add(g_objects, rabbit)
 
-   --g_dirLight = dirlight(vnormalize(vdir(-0.75,1,0)), 0.7)
-   --add(g_lights, g_dirLight)
+   g_dirLight = dirlight(vnormalize(vdir(-0.75,1,0)), 0.4)
+   add(g_lights, g_dirLight)
    g_pointLight = pointlight(vpoint(-5,0,0), 4)
    add(g_lights, g_pointLight)
 
@@ -74,8 +78,12 @@ function _update()
    if (btn(⬅️)) g_camyaw -= 0.01
    if (btnp(🅾️)) g_renderMode = (g_renderMode+1) % 3
    if btnp(❎) then
-      g_cube.isVisible = not g_cube.isVisible
-      g_apple.isVisible = not g_apple.isVisible
+      g_visibleMeshIndex = (g_visibleMeshIndex+1) % #g_objects + 1
+      for i=1,#g_objects do
+         local isVisible = false
+         if (i == g_visibleMeshIndex) isVisible = true
+         g_objects[i].isVisible = isVisible
+      end
    end
    g_camera = makecam(g_campitch,g_camyaw,g_camlen)
 
@@ -110,6 +118,7 @@ function dflush()
    for s in all(debugStrs) do
       print(s)
    end
+
    local modeStr = "triangle draw"
    if (g_renderMode == 0) modeStr = "pixel draw"
    if (g_renderMode == 1) modeStr = "wiremesh draw"
@@ -331,15 +340,12 @@ end
 -- lights: 0-directional, 1-point
 function dirlight(dir, r0) return {type=0, pos=vpoint(0,0,0), dir=dir, r0=r0} end
 function pointlight(pos, r0) return {type=1, pos=pos, dir=vdir(0,0,0), r0=r0} end
+function lightdata(ltype,ldir,lr0,lr) return {type=ltype, dir=ldir, r0=lr0, r=lr} end
 
 function fragment(v, n)
    return {vx=v[1], vy=v[2], vz=v[3],
            nx=n[1], ny=n[2], nz=n[3],
-           l1pos=false,
-           l1dir=false,
-           l1type=false,
-           l1r0=false,
-           l1r=false
+           lightsData = false,
    }
 end
 
@@ -352,18 +358,21 @@ function geometryVertexShading(projectionMatrix, mesh, v_index, n_index,
    local v = mesh.verts[v_index]
 
    -- lighting
-   local l1dir,l1type,l1r0,l1r  = false,false,false,false
+   local lightsData  = {}
 
-   local l1 = lights[1]
-   if l1 then
-      if l1.type == 0 then l1dir = l1.dir
-      elseif (l1.type == 1) then
-         local deltaToLight = vsub(l1.pos, v)
-         l1r    = max(0.001, vnorm(deltaToLight))
-         l1dir  = vscale(deltaToLight, 1/l1r)
+   for l in all(lights) do
+      local ltype,ldir,lr0,lr = false,false,false,false
+      if l then
+         if l.type == 0 then ldir = l.dir
+         elseif l.type == 1 then
+            local deltaToLight = vsub(l.pos, v)
+            lr    = max(0.001, vnorm(deltaToLight))
+            ldir  = vscale(deltaToLight, 1/lr)
+         end
+         ltype= l.type
+         lr0  = l.r0
+         add(lightsData, lightdata(ltype,ldir,lr0,lr))
       end
-      l1type= l1.type
-      l1r0  = l1.r0
    end
    
    -- vertex projection
@@ -376,10 +385,7 @@ function geometryVertexShading(projectionMatrix, mesh, v_index, n_index,
 
    -- fragment creation
    local vfrag  = fragment(camspaceVert, n)
-   vfrag.l1dir  = l1dir
-   vfrag.l1type = l1type
-   vfrag.l1r0   = l1r0
-   vfrag.l1r    = l1r
+   vfrag.lightsData  = lightsData
    return vfrag
 end
 
@@ -456,22 +462,27 @@ function interpolateTri(x, y, vfrag1, vfrag2, vfrag3, edgeValues)
                                    vdir(vfrag2.nx, vfrag2.ny, vfrag2.nz),
                                    vdir(vfrag3.nx, vfrag3.ny, vfrag3.nz))
 
-   local l1type = vfrag1.l1type
-   local l1dir = false
-   local l1r0 = false
-   if l1type == 0 then -- directional
-      l1dir = vfrag1.l1dir
-   elseif l1type == 1 then -- omni
-      -- todo add l1pos instead...
-      l1dir  = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v,
-                                vfrag1.l1dir, vfrag2.l1dir, vfrag3.l1dir)
-      l1r0   = vfrag11.l1r0
+   local interpLightsData = {}
+   for lindex=1,#vfrag1.lightsData do
+      vldata1 = vfrag1.lightsData[lindex]
+      vldata2 = vfrag2.lightsData[lindex]
+      vldata3 = vfrag3.lightsData[lindex]
+      local ltype,ldir,lr0,lr = vldata1.type,false,false,false
+      if ltype == 0 then -- directional
+         ldir   = vldata1.dir
+         lr0    = vldata1.r0
+      elseif ltype == 1 then -- omni
+         -- ldir   = baryInterpVertex(barycentric_w, barycentric_u, barycentric_v,
+         --                           vldata1.dir, vldata2.dir, vldata3.dir)
+         ldir   = vldata1.dir
+         lr0    = vldata1.r0
+         lr     = baryInterpValue(barycentric_w, barycentric_u, barycentric_v,
+                                  vldata1.r, vldata2.r, vldata3.r)
+      end
+      add(interpLightsData, lightdata(ltype,ldir,lr0,lr))
    end
-
    local pfrag  = fragment(vpoint(x,y,depth), n)
-   pfrag.l1dir  = l1dir
-   pfrag.l1type = l1type
-   pfrag.l1r0   = l1r0
+   pfrag.lightsData  = interpLightsData
    return pfrag
 end
 
@@ -512,10 +523,7 @@ function rasterizeTriangle(vfrags)
                local v = vpoint(x, y, vfrags[1].vz)
                local n = vdir(vfrags[1].nx, vfrags[1].ny, vfrags[1].nz)
                pfrag = fragment(v, n)
-               pfrag.l1dir  = vfrags[1].l1dir
-               pfrag.l1type = vfrags[1].l1type
-               pfrag.l1r0   = vfrags[1].l1r0
-               pfrag.l1r    = vfrags[1].l1r
+               pfrag.lightsData  = vfrags[1].lightsData
             end
 
             g_rasterDT += stat(1) - pixelStartDT
@@ -537,13 +545,16 @@ function rasterizeTriangleToEdges(vfrags)
    rasterizeEdge(p3x,p3y,p3z,p1x,p1y,p1z)
 end
 
-function getShadedColor(ltype, ldir, lr0, lr, nx, ny, nz)
-   local lightRatio = 1.0
-   if ltype == 0 then
-      lightRatio = clamp(0,1,max(0,lr0 * vdot(ldir, vdir(nx,ny,nz))))
-   elseif ltype == 1 then
-      lightRatio = clamp(0,1,max(0, vdot(ldir, vdir(nx,ny,nz)) * lr0*lr0 / max(lr*lr, 0.0001)))
+function getShadedColor(lightsData, nx, ny, nz)
+   local lightRatio = 0.0
+   for ldata in all(lightsData) do
+      if ldata.type == 0 then
+         lightRatio += clamp(0,1,max(0,ldata.r0 * vdot(ldata.dir, vdir(nx,ny,nz))))
+      elseif ldata.type == 1 then
+         lightRatio += clamp(0,1,max(0, vdot(ldata.dir, vdir(nx,ny,nz)) * ldata.r0*ldata.r0 / max(ldata.r*ldata.r, 0.0001)))
+      end
    end
+   lightRatio = clamp(0,1,lightRatio)
    local shadedColorIndex = min(flr(lightRatio * (#g_whiteShades-1))+1, #g_whiteShades)
    local shadedColor = g_whiteShades[shadedColorIndex]
    return shadedColor
@@ -560,7 +571,7 @@ function processPixelFragment(pfrag)
    buffSetValue(g_zbuff, pfrag.vx, pfrag.vy, pfrag.vz)
    
    -- lighting
-   local shadedColor = getShadedColor(pfrag.l1type, pfrag.l1dir, pfrag.l1r0, pfrag.l1r, pfrag.nx,pfrag.ny, pfrag.nz)
+   local shadedColor = getShadedColor(pfrag.lightsData, pfrag.nx,pfrag.ny, pfrag.nz)
    --print(shadedColor)
    
    -- pixel render
@@ -579,7 +590,7 @@ function drawTriangle(vfrags)
    local p3x,p3y,p3z = vfrags[3].vx, vfrags[3].vy, vfrags[3].vz
 
    local pfrag=vfrags[1]
-   local shadedColor = getShadedColor(pfrag.l1type, pfrag.l1dir, pfrag.l1r0, pfrag.l1r, pfrag.nx,pfrag.ny,pfrag.nz)
+   local shadedColor = getShadedColor(pfrag.lightsData, pfrag.nx,pfrag.ny,pfrag.nz)
    trifill(p1x,p1y,p2x,p2y,p3x,p3y,shadedColor)
 end
 
@@ -587,7 +598,7 @@ function render3d(camera, objects, lights)
    g_renderStartDT = stat(1)
    g_zbuff, g_triangles = {}, {}
    processGeometries(camera, objects, lights)
-   
+
    g_renderEndDT = stat(1)
 end
 
@@ -650,7 +661,16 @@ function roommesh()
          {{8,3}, {4,3}, {2,3}},
          {{4,4}, {3,4}, {1,4}}})
 end
-
+function planemesh()
+   return meshdata(
+        {vpoint(1.000000, 1.000000, 0.000000),
+         vpoint(1.000000, -1.000000, 0.000000),
+         vpoint(-1.000000, -1.000000, 0.000000),
+         vpoint(-1.000000, 1.000000, 0.000000)},
+        {vdir(0.0000, 0.0000, -1.0000)},
+        {{{1,1}, {2,1}, {3,1}},
+         {{1,1}, {3,1}, {4,1}}})
+end
 appleVertices = {
     vpoint(0.005404, 0.761771, -0.500399),
     vpoint(-0.010084, 0.482872, -0.839171),
