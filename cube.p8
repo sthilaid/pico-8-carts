@@ -76,8 +76,8 @@ function _update()
    if (btn(⬇️)) g_camlen += 0.1
    if (btn(➡️)) g_camyaw += 0.01
    if (btn(⬅️)) g_camyaw -= 0.01
-   if (btnp(🅾️)) g_renderMode = (g_renderMode+1) % 3
-   if btnp(❎) then
+   if (btnp(❎)) g_renderMode = (g_renderMode+1) % 3
+   if btnp(🅾️) then
       g_visibleMeshIndex = (g_visibleMeshIndex+1) % #g_objects + 1
       for i=1,#g_objects do
          local isVisible = false
