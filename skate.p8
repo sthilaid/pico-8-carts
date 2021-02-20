@@ -6,13 +6,15 @@ __lua__
 -- globals
 g_lastFrameTime=0
 g_skate={}
-g_jmpImpulse = 3
-g_inairAnimUp={0,4,8,12,8,4,0}
+g_maxJmpCrankTime = 1.0
+g_maxJmpImpulse = 5
+g_inairAnimUp={0,5,10,15,10,5,0}
 
 -->8
 -- updates
 function _init()
-   g_skate = {x=64,y=64,z=0,v=0,vz=0,dir=0,state=0,
+   g_skate = {x=64,y=64,z=0,v=0,vz=0,dir=0,
+              state=0,stateTime=0,
               spriteSize=4}
 end
 
@@ -21,88 +23,105 @@ function _update()
    local dt = t - g_lastFrameTime
    g_lastFrameTime = t
 
-   -- state 0: ground
-   if g_skate.state == 0 then
-      local dx,dy,dr = 0,0,0
-      if (btn(0)) dr = 1
-      if (btn(1)) dr = -1
-      if dr != 0 then
-         g_skate.dir += dr * 0.01
-      end
-      if btnp(5) then
-         if btn(0) or btn(1) then
-            g_skate.state = 2 -- x+side -> flip trick
-         else
-            g_skate.state = 1 -- x+side -> ollie
-         end
-         g_skate.vz = g_jmpImpulse -- m/s
-      end
-   end
-   -- in air
-   if g_skate.state == 1 or g_skate.state == 2 then
-      g_skate.z += g_skate.vz*dt
-      g_skate.vz -= 9.8*dt
-
-      if g_skate.z < 0 then
-         g_skate.z, g_skate.vz = 0, 0
-         g_skate.state = 0 -- ground
-      end
-   end
-end
-
-function round(x) return flr(x+0.5) end
-function clamp(minv,maxv,v) return min(maxv, max(minv, v)) end
--- rotate x,y of angle around origin
-function rot(x,y,ang)
-   local theta = atan2(x,y)
-   local l = sqrt(x*x+y*y)
-   return cos(theta+ang)*l, sin(theta+ang)*l
-end
-
--- rotate sprite s into sprite ds
---   s:         sprite index
---   spr_size:  size of sprite (as used in spr calls)
---   angle:     rotation angle (in pico angles [0,1] not radians or degrees)
---   ds:        destination sprite index
-function rotateSprite(s,spr_size,angle,ds)
-   local size = spr_size * 8
-   local halfsize = size*0.5
-   local sx,sy = (s % 16) * 8, (s \ 16) * 8
-   local dsx,dsy = (ds % 16) * 8, (ds \ 16) * 8
-   for i=0,size-1 do
-      for j=0,size-1 do
-         local u,v = rot(i-halfsize,j-halfsize,-angle)
-         local c = 0
-         if (u > -halfsize and u < halfsize and v > -halfsize and v < halfsize) then
-            local cx = clamp(sx,sx+size-1,sx+halfsize+round(u))
-            local cy = clamp(sy,sy+size-1,sy+halfsize+round(v))
-            c = sget(cx,cy)
-         end
-         sset(dsx+i, dsy+j, c)
-         end
-   end
+   updateState(dt)
 end
 
 function _draw()
    cls()
    print("s:"..g_skate.state.." z:"..g_skate.z.." vz:"..g_skate.vz.." d:"..g_skate.dir)
-   
+   drawSkate()
+end
+
+-->8
+-- states
+state_ride=0
+state_crank=1
+state_push=2
+state_ollie=3
+state_flip=4
+
+function nextState(state)
+   g_skate.state = state
+   g_skate.stateTime = 0
+end
+
+function updateState(dt)
+   if g_skate.state == state_ride then
+      local dx,dy,dr = 0,0,0
+      if (btn(0)) dr = -1
+      if (btn(1)) dr = 1
+      if dr != 0 then
+         g_skate.dir += dr * 0.01
+      end
+      if btnp(5) then
+         nextState(state_crank)
+      end
+   elseif g_skate.state == state_crank then
+      if not btn(5) then
+         g_skate.vz = clamp(0,g_maxJmpImpulse,lerp(0,g_maxJmpImpulse,invlerp(0,g_maxJmpCrankTime,g_skate.stateTime)))
+         if btn(0) or btn(1) then
+            nextState(state_flip)
+         else
+            nextState(state_ollie)
+         end
+      end
+   elseif g_skate.state == state_ollie or g_skate.state == state_flip then
+      g_skate.z += g_skate.vz*dt
+      g_skate.vz -= 9.8*dt
+
+      if g_skate.z < 0 then
+         g_skate.z, g_skate.vz = 0, 0
+         nextState(state_ride)
+      end
+   end
+   g_skate.stateTime += dt
+end
+
+-->8
+-- draw
+function drawSkate()
    local centerDelta = -g_skate.spriteSize*4 -- /2 * 8
-   if g_skate.state == 0 then
-      rotateSprite(0,g_skate.spriteSize, g_skate.dir, 64)
-      spr(64, g_skate.x+centerDelta, g_skate.y+centerDelta, g_skate.spriteSize, g_skate.spriteSize)
-   elseif g_skate.state == 1 then
+   if g_skate.state == state_ride or g_skate.state == state_crank then
+      draw_rotated_tile(g_skate.x,g_skate.y,g_skate.dir,0,0,4,false,1)
+   elseif g_skate.state == state_ollie then
+      local airScale = lerp(1,1.5,invlerp(0,2,g_skate.z))
       if g_skate.vz > 0 then
-         local sprIndex = flr((1.0 - g_skate.vz / g_jmpImpulse) * #g_inairAnimUp + 1)
+         local sprIndex = flr((1.0 - g_skate.vz / g_maxJmpImpulse) * #g_inairAnimUp + 1)
          local inairSprite = g_inairAnimUp[sprIndex]
-         rotateSprite(inairSprite,g_skate.spriteSize, g_skate.dir, 64)
-         spr(64, g_skate.x+centerDelta, g_skate.y+centerDelta, g_skate.spriteSize, g_skate.spriteSize)
+         draw_rotated_tile(g_skate.x,g_skate.y,g_skate.dir,inairSprite,0,4,false,airScale)
       else
-         rotateSprite(0,g_skate.spriteSize, g_skate.dir, 64)
-         spr(64, g_skate.x+centerDelta, g_skate.y+centerDelta, g_skate.spriteSize, g_skate.spriteSize)
+         draw_rotated_tile(g_skate.x,g_skate.y,g_skate.dir,0,0,4,false,airScale)
       end
    end
 end
+
+-->8
+-- utils
+
+-- @TheRoboZ https://www.lexaloffle.com/bbs/?pid=78451
+function draw_rotated_tile(x,y,rot,mx,my,w,flip,scale)
+  scale = scale or 1
+  w+=.8
+  local halfw, cx  = scale*-w/2, mx + w/2 -.4
+  local cs, ss, cy = cos(rot)/scale, -sin(rot)/scale, my-halfw/scale-.4
+  local sx, sy, hx, hy = cx + cs*halfw, cy - ss*halfw, w*(flip and -4 or 4)*scale, w*4*scale
+
+  --this just draw a bounding box to show the exact draw area
+  --rect(x-hx,y-hy,x+hx,y+hy,5)
+
+  for py = y-hy, y+hy do
+    tline(x-hx, py, x+hx, py, sx + ss*halfw, sy + cs*halfw, cs/8, -ss/8)
+    halfw+=1/8
+  end
+end
+
+function clamp(minv,maxv,v)
+   if (v < minv) return minv
+   if (v > maxv) return maxv
+   return v
+end
+function lerp(a,b,ratio) return (b-a)*ratio + a end
+function invlerp(a,b,v) return (v-a) / (b-a) end
 
 __gfx__
 00000000000000555500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
@@ -159,3 +178,8 @@ __gfx__
 00000000055555555555555555555555555555550000045555555555555555555555555500000044445555555555555555555555000000000644445555555555
 00000000005555555555555555555555555555500000004555555555555555555555550000000084445555555555555555555500000000008884445555555555
 00000000000005555555555555555555555000000000000555555555555555555555000000000008445555555555555555550000000000008888445555555555
+__map__
+00010203c204050607c308090a0bc40c0d0e0f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+10111213d214151617d318191a1bd41c1d1e1f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+20212223e224252627e328292a2be42c2d2e2f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+30313233f234353637f338393a3bf43c3d3e3f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
