@@ -19,7 +19,7 @@ g_maxJmpCrankTime = 1.0
 g_maxJmpImpulse = 5
 g_inairAnimUp={0,5,10,15,10,5,0}
 g_flipHalfAnim={0,5,10,15,20}
-g_groundFriction = 50
+g_groundFriction = 20
 
 -->8
 -- updates
@@ -98,8 +98,7 @@ function updateMovement(dt)
    local vx,vy = g_skate.v * sin(g_skate.dir), g_skate.v * cos(g_skate.dir) -- angle zero toward top
    g_skate.x += vx*dt
    g_skate.y += vy*dt
-   g_skate.v = max(0, g_skate.v - g_groundFriction*dt)
-      
+   
    if isAirState(g_skate.state) then
       g_skate.z += g_skate.vz*dt
       g_skate.vz -= 9.8*dt
@@ -109,7 +108,7 @@ function updateMovement(dt)
          nextState(state_ride)
       end
    else
-      print("ERROR Unhandled state: "..g_skate.state)
+      g_skate.v = max(0, g_skate.v - g_groundFriction*dt)
    end
 end
 
@@ -140,13 +139,14 @@ function drawSkate()
    elseif g_skate.state == state_flip then
       local airScale = lerp(1,1.5,invlerp(0,2,g_skate.z))
       local heightRatio = 1.0 - abs(g_skate.vz / g_maxJmpImpulse)
-      local sprIndex = min(flr(heightRatio * #g_flipHalfAnim + 1), #g_flipHalfAnim)
+      local sprIndex = clamp(1, #g_flipHalfAnim, flr(heightRatio * #g_flipHalfAnim + 1))
       local flipSprite = g_flipHalfAnim[sprIndex]
       if g_skate.vz > 0 then
          draw_rotated_tile(x,y,g_skate.dir,flipSprite,6,4,false,airScale)
       else
-         -- todo correct angle because of flipping sprite
-         draw_rotated_tile(x,y,g_skate.dir,flipSprite,6,4,true,airScale)
+         -- flip skate dir because flip is first than rotation second which
+         -- result in rotation in wrong direction
+         draw_rotated_tile(x,y,-g_skate.dir,flipSprite,6,4,true,airScale)
       end
    end
 end
