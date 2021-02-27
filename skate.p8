@@ -26,12 +26,15 @@ g_objects = {}
 function makepipe(x,y,angle,count)
    local pipe = {x=x, y=y, angle=angle, count=count}
    pipe.intersects = function (self,x,y,w,h)
+      -- o1+a1*d1 = o2+a2*d2
       return true
    end
    pipe.draw = function(self,camx,camy)
       if (self:intersects(camx-64,camy-64,128,128)) then
          local x,y = self.x-camx+g_skate.offx, self.y-camy+g_skate.offy
          line(x,y,x+sin(self.angle)*count*8,y-cos(self.angle)*count*8, 6)
+         -- todo increase width (move offset with angle)
+         --line(x+1,y,x+1+sin(self.angle)*count*8,y-cos(self.angle)*count*8, 6)
       end
    end
    return pipe
@@ -43,7 +46,7 @@ function _init()
    g_skate = {x=0,y=0,z=0,v=0,vz=0,dir=0,
               state=0,stateTime=0, offx=64, offy=64,
               spriteSize=4}
-   add(g_objects, makepipe(0,0,0,10))
+   --add(g_objects, makepipe(0,0,0.12,10))
 end
 
 function _update()
@@ -61,8 +64,15 @@ function _draw()
    drawObjects()
    drawSkate()
    drawHUD()
-   print("x,y:"..g_skate.x..","..g_skate.y.." v:"..g_skate.v)
-   print("s:"..g_skate.state.." z:"..g_skate.z.." vz:"..g_skate.vz.." d:"..g_skate.dir)
+   -- print("x,y:"..g_skate.x..","..g_skate.y.." v:"..g_skate.v)
+   -- print("s:"..g_skate.state.." z:"..g_skate.z.." vz:"..g_skate.vz.." d:"..g_skate.dir)
+   if isAirState(g_skate.state) then
+      print("",0,116)
+   elseif g_skate.state == state_crank then
+      print("⬅️➡️: flip",0,116)
+   else
+      print("⬅️➡️ steer 🅾️ push ❎ jump",0,116)
+   end
 end
 
 -->8
@@ -111,6 +121,9 @@ end
 
 -->8
 -- physics
+
+function detectCollision(obj)
+end
 
 function updateMovement(dt)
    local vx,vy = -g_skate.v * sin(g_skate.dir), -g_skate.v * cos(g_skate.dir) -- angle zero toward top
