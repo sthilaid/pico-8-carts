@@ -17,10 +17,13 @@ flag_turf   = 2
 flag_start  = 6
 flag_hole   = 7
 
-g_aim_rot_accel = 0.1
-g_power_accel   = 0.5
-g_accuracy_accel= 0.1
-g_zoom_accel    = 0.3
+g_gravity               = -9.8
+g_aim_rot_accel         = 0.1
+g_power_accel           = 0.5
+g_accuracy_accel        = 0.5
+g_zoom_accel            = 0.3
+g_swing_power_target    = 0.85
+g_swing_accuracy_target = 0.15
 
 -- stats from https://blog.trackmangolf.com/trackman-average-tour-stats/
 function make_club(name, maxdist, maxheight) return {name=name,maxdist=maxdist,maxheight=maxheight} end
@@ -46,9 +49,11 @@ g_stateTime     = 0
 g_swing_power   = 0
 g_swing_accuracy= 0
 g_aim_angle     = 0
-g_ballx, g_bally= 0,0
 g_club_index    = 1
 g_zoom_ratio    = 1.0
+
+g_ball_x, g_ball_y, g_ball_z    = 0,0,0
+g_ball_vx, g_ball_vy, g_ball_vz = 0,0,0
 
 g_frame_offset_x = 0
 g_frame_offset_y = 0
@@ -70,12 +75,12 @@ function set_course(course)
    g_aim_angle = -0.25
 
    -- init ball start by finding start coord in map
-   g_ballx, g_bally = 0,0
+   g_ball_x, g_ball_y = 0,0
    for y=course.y0,course.y0+course.h do
       for x=course.x0,course.x0+course.w do
          local isStart = fget(mget(x,y), flag_start)
          if (isStart) then
-            g_ballx, g_bally = x*8+4 * course.pixelToWorldRatio, y*8+2 * course.pixelToWorldRatio
+            g_ball_x, g_ball_y = x*8+4 * course.pixelToWorldRatio, y*8+2 * course.pixelToWorldRatio
             goto done
          end
       end
@@ -102,6 +107,7 @@ function _draw()
    cls()
    update_frame_offset()
    drawcourse(g_course)
+   drawball()
    drawhud()
    drawdebug()
 end
@@ -117,6 +123,29 @@ state_swing_action      = 3
 function transitionTo(newstate)
    g_state = newstate
    g_stateTime = 0
+
+   -- on enter state
+   if newstate == state_idle then
+      g_swing_power, g_swing_accuracy = 0,0
+      
+   elseif newstate == state_swing_accuracy then
+      g_swing_accuracy = g_swing_power
+
+   elseif newstate == state_swing_action then
+      local maxdist     = g_clubs[g_club_index].maxdist
+      local maxheight   = g_clubs[g_club_index].maxheight
+      local powerRatio  = lerp(0.5, 1.0, invlerp(-0.4, 0, g_swing_power - g_swing_power_target))
+      local height      = maxheight * powerRatio
+      local airTime     = sqrt(-8 * height / g_gravity)
+      local speed       = powerRatio * maxdist / airTime
+      g_ball_vx, g_ball_vy = speed * cos(g_aim_angle), speed * sin(g_aim_angle)
+      g_ball_vz         = height * airTime
+      -- print("pos: "..g_ball_x..","..g_ball_y..","..g_ball_z)
+      -- print("vel: "..g_ball_vx..","..g_ball_vy..","..g_ball_vz)
+      -- print("powerRatio:"..powerRatio)
+      -- print("airtime:"..airTime)
+      -- stop()
+   end
 end
 
 function update_state_transitions(dt)
@@ -148,13 +177,25 @@ function update_state(dt)
          if (btnp(btn_up))    g_club_index = clamp(1,#g_clubs, g_club_index-1)
          if (btnp(btn_down))  g_club_index = clamp(1,#g_clubs, g_club_index+1)
       end
+
    elseif g_state == state_swing_power then
       if btn(btn_x) then
          g_swing_power = clamp(0,1, g_swing_power + g_power_accel * dt)
       end
+
    elseif g_state == state_swing_accuracy then
-      if btn(btn_x) then
-         g_swing_accuracy = clamp(0,1, g_swing_accuracy + g_accuracy_accel * dt)
+      g_swing_accuracy = clamp(0,1, g_swing_accuracy - g_accuracy_accel * dt)
+
+   elseif g_state == state_swing_action then
+      g_ball_x, g_ball_y = g_ball_x + g_ball_vx * dt, g_ball_y + g_ball_vy * dt
+      g_ball_z = g_ball_z + g_ball_vz * dt
+
+      if g_ball_z < 0 then
+         g_ball_z = 0
+         g_ball_vx, g_ball_vy, g_ball_vz = 0,0,0 -- no bounces for now
+         transitionTo(state_idle)
+      else
+         g_ball_vz = g_ball_vz + g_gravity * dt
       end
    end
 end
@@ -162,13 +203,13 @@ end
 -->8
 -- draw
 function worldToPixel(x,y)
-   local wx,wy = x * g_course.worldPixelRatio * g_zoom_ratio, y * g_course.worldPixelRatio * g_zoom_ratio
+   local wx,wy = x * g_course.worldPixelRatio * g_zoom_ratio + g_frame_offset_x, y * g_course.worldPixelRatio * g_zoom_ratio + g_frame_offset_y
    return wx,wy
 end
 
 function update_frame_offset()
-   local ballPX, ballPY = worldToPixel(g_ballx,g_bally)
-   g_frame_offset_x, g_frame_offset_y = ballPX - 64, ballPY - 64
+   local ballPX, ballPY = g_ball_x * g_course.worldPixelRatio * g_zoom_ratio, g_ball_y * g_course.worldPixelRatio * g_zoom_ratio
+   g_frame_offset_x, g_frame_offset_y = 0, max(0, ballPY - 64)
 end
 
 function drawcourse(course)
@@ -180,32 +221,40 @@ function drawcourse(course)
    end
 end
 
+function drawball()
+   local ballx, bally = worldToPixel(g_ball_x, g_ball_y)
+   circfill(ballx, bally, 1, 7)
+end
+
 function drawhud()
    if g_state == state_idle then
       local pixeldist = g_clubs[g_club_index].maxdist * g_course.worldPixelRatio * g_zoom_ratio
-      --local ballx, bally = worldToPixel(g_ballx, g_bally)
-      --local ballx, bally = g_ballx * g_course.worldPixelRatio + offset_x*8, g_bally * g_course.worldPixelRatio + offset_y*8
-      local x0,y0 = 64, 64
+      local ballx, bally = worldToPixel(g_ball_x, g_ball_y)
+      local x0,y0 = ballx, bally
       local x1,y1 = x0 + cos(g_aim_angle) * pixeldist, y0 + sin(g_aim_angle) * pixeldist
       line(x0,y0, x1,y1, 7)
       
    elseif g_state == state_swing_power or g_state == state_swing_accuracy then
       local x0,y0,w,h = 115,64,8,48
-      local currentPad = 3
-      local powerRatio = 1.0 - g_swing_power
+      local currentPad,targetPad = 3,1
+      local powerHeight = h * (1.0 - g_swing_power)
 
       rect(x0-1,y0-1,x0+w+1,y0+h+1, 7) -- highlight
       rectfill(x0,y0,x0+w,y0+h, 6)
       
       if g_state == state_swing_power then
-         local targetRatio,targetPad = 0.15,1
-         line(x0-targetPad,y0+h*targetRatio,x0+w+targetPad,y0+h*targetRatio,9)
-         line(x0-currentPad,y0+h*powerRatio,x0+w+currentPad,y0+h*powerRatio,8)
+         local targetRectHeight = h * (1.0-g_swing_power_target)
+         line(x0-targetPad, y0+targetRectHeight, x0+w+targetPad, y0+targetRectHeight, 9)
+         line(x0-currentPad, y0+powerHeight, x0+w+currentPad, y0+powerHeight,8)
          
-         local powerFillOffset = h*powerRatio
-         rectfill(x0,y0+powerFillOffset,x0+w,y0+h*g_swing_power+powerFillOffset,8)
+         rectfill(x0,y0+powerHeight,x0+w,y0+h*g_swing_power+powerHeight,8)
       elseif g_state == state_swing_accuracy then
-         line(x0-currentPad,y0+h*powerRatio,x0+w+currentPad,y0+h*powerRatio,8)
+         local accuracyheight = h * (1 - g_swing_accuracy_target)
+         line(x0-currentPad, y0+powerHeight, x0+w+currentPad, y0+powerHeight, 8)
+         line(x0-targetPad, y0+accuracyheight, x0+w+targetPad, y0+accuracyheight,9)
+         
+         local accuracyRatio = 1.0 - g_swing_accuracy
+         line(x0-currentPad,y0+h*accuracyRatio,x0+w+currentPad,y0+h*accuracyRatio,10)
       end
    end
 end
@@ -213,11 +262,24 @@ end
 function drawdebug()
    color(7)
    print("s:"..g_state.." d:"..g_aim_angle.." p:"..g_swing_power.." a:"..g_swing_accuracy)
+   print("pos: "..format(g_ball_x)..","..format(g_ball_y)..","..format(g_ball_z))
+   print("vel: "..format(g_ball_vx)..","..format(g_ball_vy)..","..format(g_ball_vz))
    print("club: "..g_clubs[g_club_index].name,0,116)
 end
 
 -->8
 -- utils
+
+function pow(base,exp)
+   if exp <= 0 then return 1 end
+   return base*pow(base,exp-1)
+end
+
+function format(num, digits)
+   digits = digits or 2
+   local v = pow(10, digits)
+   return flr(num * v) / v
+end
 
 -- @TheRoboZ https://www.lexaloffle.com/bbs/?pid=78451
 function draw_rotated_tile(x,y,rot,mx,my,w,flip,scale)
