@@ -20,6 +20,7 @@ flag_hole   = 7
 g_aim_rot_accel = 0.1
 g_power_accel   = 0.5
 g_accuracy_accel= 0.1
+g_zoom_accel    = 0.3
 
 -- stats from https://blog.trackmangolf.com/trackman-average-tour-stats/
 function make_club(name, maxdist, maxheight) return {name=name,maxdist=maxdist,maxheight=maxheight} end
@@ -48,6 +49,9 @@ g_aim_angle     = 0
 g_ballx, g_bally= 0,0
 g_club_index    = 1
 g_zoom_ratio    = 1.0
+
+g_frame_offset_x = 0
+g_frame_offset_y = 0
 
 -- objets
 function make_course(x0,y0,w,h,world_h)
@@ -96,6 +100,7 @@ end
 
 function _draw()
    cls()
+   update_frame_offset()
    drawcourse(g_course)
    drawhud()
    drawdebug()
@@ -133,10 +138,15 @@ function update_state(dt)
       local dir = 0
       if (btn(btn_right))   dir = 1
       if (btn(btn_left))    dir = -1
-      if (btnp(btn_up))     g_club_index = clamp(1,#g_clubs, g_club_index-1)
-      if (btnp(btn_down))   g_club_index = clamp(1,#g_clubs, g_club_index+1)
       if dir != 0 then
          g_aim_angle = standardize_angle(g_aim_angle + dir * g_aim_rot_accel * dt)
+      end
+      if btn(btn_o) then
+         if (btn(btn_up))     g_zoom_ratio = clamp(0.1, 3, g_zoom_ratio + g_zoom_accel * dt)
+         if (btn(btn_down))   g_zoom_ratio = clamp(0.1, 3, g_zoom_ratio - g_zoom_accel * dt)
+      else
+         if (btnp(btn_up))    g_club_index = clamp(1,#g_clubs, g_club_index-1)
+         if (btnp(btn_down))  g_club_index = clamp(1,#g_clubs, g_club_index+1)
       end
    elseif g_state == state_swing_power then
       if btn(btn_x) then
@@ -151,26 +161,33 @@ end
 
 -->8
 -- draw
-function get_camera_map_offset()
-    -- todo add zoom
-   g_zoom_ratio = 1 -- temp
-   local ballPX, ballPY = g_ballx * g_course.worldPixelRatio, g_bally * g_course.worldPixelRatio
-   return (64 - ballPX)/8, (64 - ballPX)/8
+function worldToPixel(x,y)
+   local wx,wy = x * g_course.worldPixelRatio * g_zoom_ratio, y * g_course.worldPixelRatio * g_zoom_ratio
+   return wx,wy
 end
+
+function update_frame_offset()
+   local ballPX, ballPY = worldToPixel(g_ballx,g_bally)
+   g_frame_offset_x, g_frame_offset_y = ballPX - 64, ballPY - 64
+end
+
 function drawcourse(course)
-   local offset_x, offset_y = get_camera_map_offset()
+   local pixelsPerSprite = 8 * g_zoom_ratio
+   local offset_x, offset_y = g_frame_offset_x / pixelsPerSprite, g_frame_offset_y / pixelsPerSprite
+   --local offset_x, offset_y = 0,0
    for y=0,127 do
-      tline(0,y, 127,y, -offset_x, -offset_y+y/8/g_zoom_ratio, 1/8/g_zoom_ratio, 0)
+      tline(0,y, 127,y, offset_x, offset_y+y/pixelsPerSprite, 1/pixelsPerSprite, 0)
    end
-   print("off: "..offset_x.." "..offset_y)
 end
 
 function drawhud()
    if g_state == state_idle then
-      local pixeldist = g_clubs[g_club_index].maxdist * g_course.worldPixelRatio
-      local offset_x, offset_y = get_camera_map_offset()
-      local ballx, bally = g_ballx * g_course.worldPixelRatio + offset_x*8, g_bally * g_course.worldPixelRatio + offset_y*8
-      line(ballx, bally, ballx + cos(g_aim_angle) * pixeldist, bally + sin(g_aim_angle) * pixeldist, 7)
+      local pixeldist = g_clubs[g_club_index].maxdist * g_course.worldPixelRatio * g_zoom_ratio
+      --local ballx, bally = worldToPixel(g_ballx, g_bally)
+      --local ballx, bally = g_ballx * g_course.worldPixelRatio + offset_x*8, g_bally * g_course.worldPixelRatio + offset_y*8
+      local x0,y0 = 64, 64
+      local x1,y1 = x0 + cos(g_aim_angle) * pixeldist, y0 + sin(g_aim_angle) * pixeldist
+      line(x0,y0, x1,y1, 7)
       
    elseif g_state == state_swing_power or g_state == state_swing_accuracy then
       local x0,y0,w,h = 115,64,8,48
