@@ -135,15 +135,17 @@ function transitionTo(newstate)
       local maxdist     = g_clubs[g_club_index].maxdist
       local maxheight   = g_clubs[g_club_index].maxheight
       local powerRatio  = lerp(0.5, 1.0, invlerp(-0.4, 0, g_swing_power - g_swing_power_target))
-      local height      = maxheight * powerRatio
+      local dist,height = powerRatio * maxdist, powerRatio * maxheight
       local airTime     = sqrt(-8 * height / g_gravity)
-      local speed       = powerRatio * maxdist / airTime
+      local speed       = dist / airTime
       g_ball_vx, g_ball_vy = speed * cos(g_aim_angle), speed * sin(g_aim_angle)
-      g_ball_vz         = height * airTime
+      g_ball_vz         = sqrt(-2*height*g_gravity)
       -- print("pos: "..g_ball_x..","..g_ball_y..","..g_ball_z)
       -- print("vel: "..g_ball_vx..","..g_ball_vy..","..g_ball_vz)
       -- print("powerRatio:"..powerRatio)
+      -- print("d:".."h:"..height)
       -- print("airtime:"..airTime)
+      -- print("vz: "..vz.." | "..g_ball_vz)
       -- stop()
    end
 end
@@ -203,7 +205,7 @@ end
 -->8
 -- draw
 function worldToPixel(x,y)
-   local wx,wy = x * g_course.worldPixelRatio * g_zoom_ratio + g_frame_offset_x, y * g_course.worldPixelRatio * g_zoom_ratio + g_frame_offset_y
+   local wx,wy = x * g_course.worldPixelRatio * g_zoom_ratio - g_frame_offset_x, y * g_course.worldPixelRatio * g_zoom_ratio - g_frame_offset_y
    return wx,wy
 end
 
@@ -223,7 +225,8 @@ end
 
 function drawball()
    local ballx, bally = worldToPixel(g_ball_x, g_ball_y)
-   circfill(ballx, bally, 1, 7)
+   local ballr = lerp(1,8,invlerp(0,35, g_ball_z))
+   circfill(ballx, bally, ballr, 7)
 end
 
 function drawhud()
