@@ -214,9 +214,9 @@ end
 function update_frame_offset()
    local zoomedPixelratio = g_course.worldPixelRatio * g_zoom_ratio
    local ballPX, ballPY = g_ball_x * zoomedPixelratio, g_ball_y * zoomedPixelratio
-   --g_frame_offset_x, g_frame_offset_y = 0, clamp(0, g_course.h*8-128, ballPY - 64)
-   g_frame_offset_x = clamp(0, max(0,g_course.w*8*g_zoom_ratio - 128), ballPX - 64)
-   g_frame_offset_y = clamp(0, max(0,g_course.h*8*g_zoom_ratio - 128), ballPY - 64)
+   local cx, cy = 64 + cos(g_aim_angle+0.5) * 42, 64 + sin(g_aim_angle+0.5) * 42
+   g_frame_offset_x = clamp(0, max(0,g_course.w*8*g_zoom_ratio - 128), ballPX - cx)
+   g_frame_offset_y = clamp(0, max(0,g_course.h*8*g_zoom_ratio - 128), ballPY - cy)
 end
 
 function drawcourse(course)
