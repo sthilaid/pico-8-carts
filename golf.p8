@@ -90,6 +90,7 @@ end
 -->8
 -- updates
 function _init()
+   pal(14,129)
    set_course(make_course(0,0,16,32,250,500))
    g_state  = state_idle
 end
@@ -205,22 +206,28 @@ end
 -->8
 -- draw
 function worldToPixel(x,y)
-   local wx,wy = x * g_course.worldPixelRatio * g_zoom_ratio - g_frame_offset_x, y * g_course.worldPixelRatio * g_zoom_ratio - g_frame_offset_y
+   local zoomedPixelRatio = g_course.worldPixelRatio * g_zoom_ratio
+   local wx,wy = x * zoomedPixelRatio - g_frame_offset_x, y * zoomedPixelRatio - g_frame_offset_y
    return wx,wy
 end
 
 function update_frame_offset()
-   local ballPX, ballPY = g_ball_x * g_course.worldPixelRatio * g_zoom_ratio, g_ball_y * g_course.worldPixelRatio * g_zoom_ratio
-   g_frame_offset_x, g_frame_offset_y = 0, max(0, ballPY - 64)
+   local zoomedPixelratio = g_course.worldPixelRatio * g_zoom_ratio
+   local ballPX, ballPY = g_ball_x * zoomedPixelratio, g_ball_y * zoomedPixelratio
+   --g_frame_offset_x, g_frame_offset_y = 0, clamp(0, g_course.h*8-128, ballPY - 64)
+   g_frame_offset_x = clamp(0, max(0,g_course.w*8*g_zoom_ratio - 128), ballPX - 64)
+   g_frame_offset_y = clamp(0, max(0,g_course.h*8*g_zoom_ratio - 128), ballPY - 64)
 end
 
 function drawcourse(course)
    local pixelsPerSprite = 8 * g_zoom_ratio
    local offset_x, offset_y = g_frame_offset_x / pixelsPerSprite, g_frame_offset_y / pixelsPerSprite
-   --local offset_x, offset_y = 0,0
-   for y=0,127 do
-      tline(0,y, 127,y, offset_x, offset_y+y/pixelsPerSprite, 1/pixelsPerSprite, 0)
+   local width  = min(127, g_course.w * pixelsPerSprite - g_frame_offset_x)
+   local height = min(127, g_course.h * pixelsPerSprite - g_frame_offset_y)
+   for y=0,height do
+      tline(0,y, width,y, offset_x, offset_y+y/pixelsPerSprite, 1/pixelsPerSprite, 0)
    end
+   print(offset_x.." | "..offset_y)
 end
 
 function drawball()
@@ -264,10 +271,15 @@ end
 
 function drawdebug()
    color(7)
-   print("s:"..g_state.." d:"..g_aim_angle.." p:"..g_swing_power.." a:"..g_swing_accuracy)
-   print("pos: "..format(g_ball_x)..","..format(g_ball_y)..","..format(g_ball_z))
-   print("vel: "..format(g_ball_vx)..","..format(g_ball_vy)..","..format(g_ball_vz))
-   print("club: "..g_clubs[g_club_index].name,0,116)
+   -- print("s:"..g_state.." d:"..g_aim_angle.." p:"..g_swing_power.." a:"..g_swing_accuracy)
+   -- print("pos: "..format(g_ball_x)..","..format(g_ball_y)..","..format(g_ball_z))
+   -- print("vel: "..format(g_ball_vx)..","..format(g_ball_vy)..","..format(g_ball_vz))
+   line(0,120,127,120,6)
+   rectfill(0,121,127,127,14)
+   color(5)
+   print("club: "..g_clubs[g_club_index].name,2,122)
+   color(7)
+   print("club: "..g_clubs[g_club_index].name,1,122)
 end
 
 -->8
