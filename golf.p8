@@ -26,19 +26,24 @@ g_swing_power_target    = 0.85
 g_swing_accuracy_target = 0.15
 
 -- stats from https://blog.trackmangolf.com/trackman-average-tour-stats/
-function make_club(name, maxdist, maxheight) return {name=name,maxdist=maxdist,maxheight=maxheight} end
-g_clubs     = { make_club("driver", 275, 32),
-                make_club("3 wood", 243, 30),
-                make_club("5 wood", 230, 31),
-                make_club("3 iron", 212, 27),
-                make_club("4 iron", 203, 28),
-                make_club("5 iron", 194, 31),
-                make_club("6 iron", 183, 30),
-                make_club("7 iron", 172, 32),
-                make_club("8 iron", 160, 31),
-                make_club("9 iron", 148, 30),
-                make_club("pw", 136, 29),
-                make_club("putter", 50, 0),
+function make_club(name, maxdist, maxheight, powerTarget, powerTargetRange, accTarget, accTargetRange)
+   g_swing_power_target    = 0.85
+   g_swing_accuracy_target = 0.15
+   return {name=name,maxdist=maxdist,maxheight=maxheight,
+           powerTarget=powerTarget, powerTargetRange=powerTargetRange, accTarget=accTarget, accTargetRange=accTargetRange}
+end
+g_clubs     = { make_club("driver", 275, 32, 0.9, 0.01, 0.1, 0.05),
+                make_club("3 wood", 243, 30, 0.85, 0.02, 0.15, 0.1),
+                make_club("5 wood", 230, 31, 0.95, 0.02, 0.15, 0.1),
+                make_club("3 iron", 212, 27, 0.8, 0.05, 0.2, 0.15),
+                make_club("4 iron", 203, 28, 0.8, 0.05, 0.2, 0.15),
+                make_club("5 iron", 194, 31, 0.8, 0.05, 0.2, 0.15),
+                make_club("6 iron", 183, 30, 0.8, 0.05, 0.2, 0.15),
+                make_club("7 iron", 172, 32, 0.8, 0.05, 0.2, 0.15),
+                make_club("8 iron", 160, 31, 0.8, 0.05, 0.2, 0.15),
+                make_club("9 iron", 148, 30, 0.8, 0.05, 0.2, 0.15),
+                make_club("pw", 100, 29, 0.8, 0.2, 0.1, 0.2),
+                make_club("putter", 50, 0, -1, -1, -1, -1),
 }
 
 -- global state variables
@@ -121,6 +126,16 @@ state_swing_power       = 1
 state_swing_accuracy    = 2
 state_swing_action      = 3
 
+function calcSwingPower()
+   if (g_clubs[g_club_index].powerTarget < 0) return g_swing_power
+
+   local target, range = g_clubs[g_club_index].powerTarget, g_clubs[g_club_index].powerTargetRange
+   local delta = g_swing_power - target
+   if (abs(delta) < range) return 1.0
+   local outrangeRatio = clamp(0,1,invlerp(0, 1-range, g_swing_power))
+   return lerp(0.1, 1.0, outrangeRatio) -- should add min ratio (0.1) to club data?
+end
+
 function transitionTo(newstate)
    g_state = newstate
    g_stateTime = 0
@@ -135,7 +150,8 @@ function transitionTo(newstate)
    elseif newstate == state_swing_action then
       local maxdist     = g_clubs[g_club_index].maxdist
       local maxheight   = g_clubs[g_club_index].maxheight
-      local powerRatio  = lerp(0.5, 1.0, invlerp(-0.4, 0, g_swing_power - g_swing_power_target))
+      --local powerRatio  = lerp(0.5, 1.0, invlerp(-0.4, 0, g_swing_power - g_swing_power_target))
+      local powerRatio  = calcSwingPower()
       local dist,height = powerRatio * maxdist, powerRatio * maxheight
       local airTime     = sqrt(-8 * height / g_gravity)
       local speed       = dist / airTime
@@ -143,11 +159,11 @@ function transitionTo(newstate)
       g_ball_vz         = sqrt(-2*height*g_gravity)
       -- print("pos: "..g_ball_x..","..g_ball_y..","..g_ball_z)
       -- print("vel: "..g_ball_vx..","..g_ball_vy..","..g_ball_vz)
-      -- print("powerRatio:"..powerRatio)
+      --print("powerRatio:"..powerRatio,0,4)
       -- print("d:".."h:"..height)
       -- print("airtime:"..airTime)
       -- print("vz: "..vz.." | "..g_ball_vz)
-      -- stop()
+      --stop()
    end
 end
 
@@ -227,7 +243,7 @@ function drawcourse(course)
    for y=0,height do
       tline(0,y, width,y, offset_x, offset_y+y/pixelsPerSprite, 1/pixelsPerSprite, 0)
    end
-   print(offset_x.." | "..offset_y)
+   --print(offset_x.." | "..offset_y)
 end
 
 function drawball()
@@ -253,8 +269,12 @@ function drawhud()
       rectfill(x0,y0,x0+w,y0+h, 6)
       
       if g_state == state_swing_power then
+         local powerrange = g_clubs[g_club_index].powerTargetRange
          local targetRectHeight = h * (1.0-g_swing_power_target)
-         line(x0-targetPad, y0+targetRectHeight, x0+w+targetPad, y0+targetRectHeight, 9)
+         local targetRectHeightRangeDelta = h * powerrange
+         --line(x0-targetPad, y0+targetRectHeight, x0+w+targetPad, y0+targetRectHeight, 9)
+         rectfill(x0, max(y0, y0+targetRectHeight-targetRectHeightRangeDelta),
+                  x0+w, y0+targetRectHeight+targetRectHeightRangeDelta, 9)
          line(x0-currentPad, y0+powerHeight, x0+w+currentPad, y0+powerHeight,8)
          
          rectfill(x0,y0+powerHeight,x0+w,y0+h*g_swing_power+powerHeight,8)
