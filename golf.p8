@@ -32,17 +32,17 @@ function make_club(name, maxdist, maxheight, powerTarget, powerTargetRange, accT
    return {name=name,maxdist=maxdist,maxheight=maxheight,
            powerTarget=powerTarget, powerTargetRange=powerTargetRange, accTarget=accTarget, accTargetRange=accTargetRange}
 end
-g_clubs     = { make_club("driver", 275, 32, 0.9, 0.01, 0.1, 0.05),
-                make_club("3 wood", 243, 30, 0.85, 0.02, 0.15, 0.1),
-                make_club("5 wood", 230, 31, 0.95, 0.02, 0.15, 0.1),
-                make_club("3 iron", 212, 27, 0.8, 0.05, 0.2, 0.15),
-                make_club("4 iron", 203, 28, 0.8, 0.05, 0.2, 0.15),
-                make_club("5 iron", 194, 31, 0.8, 0.05, 0.2, 0.15),
-                make_club("6 iron", 183, 30, 0.8, 0.05, 0.2, 0.15),
-                make_club("7 iron", 172, 32, 0.8, 0.05, 0.2, 0.15),
-                make_club("8 iron", 160, 31, 0.8, 0.05, 0.2, 0.15),
-                make_club("9 iron", 148, 30, 0.8, 0.05, 0.2, 0.15),
-                make_club("pw", 100, 29, 0.8, 0.2, 0.1, 0.2),
+g_clubs     = { make_club("driver", 275, 32, 0.9, 0.01, 0.1, 0.01),
+                make_club("3 wood", 243, 30, 0.85, 0.02, 0.15, 0.01),
+                make_club("5 wood", 230, 31, 0.95, 0.02, 0.15, 0.02),
+                make_club("3 iron", 212, 27, 0.8, 0.05, 0.2, 0.03),
+                make_club("4 iron", 203, 28, 0.8, 0.05, 0.2, 0.03),
+                make_club("5 iron", 194, 31, 0.8, 0.05, 0.2, 0.03),
+                make_club("6 iron", 183, 30, 0.8, 0.05, 0.2, 0.03),
+                make_club("7 iron", 172, 32, 0.8, 0.05, 0.2, 0.03),
+                make_club("8 iron", 160, 31, 0.8, 0.05, 0.2, 0.03),
+                make_club("9 iron", 148, 30, 0.8, 0.05, 0.2, 0.03),
+                make_club("pw", 100, 29, 0.8, 0.1, 0.1, 0.04),
                 make_club("putter", 50, 0, -1, -1, -1, -1),
 }
 
@@ -136,6 +136,23 @@ function calcSwingPower()
    return lerp(0.1, 1.0, outrangeRatio) -- should add min ratio (0.1) to club data?
 end
 
+function calcSwingAngle()
+   local target,range = g_clubs[g_club_index].accTarget, g_clubs[g_club_index].accTargetRange
+   local delta = g_swing_accuracy - target
+   if (abs(delta) < range) return g_aim_angle
+   local total_range = g_swing_power - (target + range)
+   local outrangeRatio = clamp(0,1,invlerp(0, total_range, abs(delta) - range))
+   local precisionAnglePenality = lerp(0.001, 0.125, outrangeRatio)
+   local precisionDir = (rnd() > 0.5 and 1) or -1
+   local finalAngle = standardize_angle(g_aim_angle + precisionDir * precisionAnglePenality)
+   -- print(g_swing_accuracy,0,40)
+   -- print(outrangeRatio)
+   -- print(precisionAnglePenality)
+   -- print(finalAngle)
+   -- stop()
+   return finalAngle
+end
+
 function transitionTo(newstate)
    g_state = newstate
    g_stateTime = 0
@@ -152,10 +169,11 @@ function transitionTo(newstate)
       local maxheight   = g_clubs[g_club_index].maxheight
       --local powerRatio  = lerp(0.5, 1.0, invlerp(-0.4, 0, g_swing_power - g_swing_power_target))
       local powerRatio  = calcSwingPower()
+      local shotAngle   = calcSwingAngle()
       local dist,height = powerRatio * maxdist, powerRatio * maxheight
       local airTime     = sqrt(-8 * height / g_gravity)
       local speed       = dist / airTime
-      g_ball_vx, g_ball_vy = speed * cos(g_aim_angle), speed * sin(g_aim_angle)
+      g_ball_vx, g_ball_vy = speed * cos(shotAngle), speed * sin(shotAngle)
       g_ball_vz         = sqrt(-2*height*g_gravity)
       -- print("pos: "..g_ball_x..","..g_ball_y..","..g_ball_z)
       -- print("vel: "..g_ball_vx..","..g_ball_vy..","..g_ball_vz)
@@ -280,8 +298,13 @@ function drawhud()
          rectfill(x0,y0+powerHeight,x0+w,y0+h*g_swing_power+powerHeight,8)
       elseif g_state == state_swing_accuracy then
          local accuracyheight = h * (1 - g_swing_accuracy_target)
+         local accuracyRange    = g_clubs[g_club_index].accTargetRange
+         local targetRectHeight = h * (1.0-g_swing_accuracy_target)
+         local targetRectHeightRangeDelta = h * accuracyRange
          line(x0-currentPad, y0+powerHeight, x0+w+currentPad, y0+powerHeight, 8)
-         line(x0-targetPad, y0+accuracyheight, x0+w+targetPad, y0+accuracyheight,9)
+         --line(x0-targetPad, y0+accuracyheight, x0+w+targetPad, y0+accuracyheight,9)
+         rectfill(x0, max(y0, y0+targetRectHeight-targetRectHeightRangeDelta),
+                  x0+w, y0+targetRectHeight+targetRectHeightRangeDelta, 9)
          
          local accuracyRatio = 1.0 - g_swing_accuracy
          line(x0-currentPad,y0+h*accuracyRatio,x0+w+currentPad,y0+h*accuracyRatio,10)
