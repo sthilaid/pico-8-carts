@@ -2,6 +2,25 @@ pico-8 cartridge // http://www.pico-8.com
 version 30
 __lua__
 
+game_state = 2 -- 0: title, 1: char select, 2: car select, 3: race
+
+text_anim_endtime = 9999
+
+function make_char(sprIndex, name, maxspeed, turnspeed)
+   return {sprIndex=sprIndex, name=name, maxspeed=maxspeed, turnspeed=turnspeed}
+end
+
+function make_car(sprIndex, name, color)
+   return {sprIndex=sprIndex, name=name, color=maxspeed}
+end
+
+char_index = 1
+char_db = {}
+
+car_index = 1
+car_db = {}
+car_colors = {8,9,10,11,12,3,14}
+
 car_state = 0 -- 0 ok, 1 explosion
 car_state_time = 0
 car_x=64
@@ -20,6 +39,13 @@ explosion_time = 30
 test_infront = 0
 
 function _init()
+   add(char_db, make_char(13, "clara", 0.7, 120/360/30))
+   add(char_db, make_char(14, "emile", 2.0, 90/360/30))
+   add(char_db, make_char(15, "david", 1.5, 110/360/30))
+
+   add(car_db, make_car(2, "turbo 8", 11))
+   add(car_db, make_car(3, "formula 6", 11))
+   add(car_db, make_car(4, "dragster", 11))
 end
 
 function turn(angle)
@@ -32,73 +58,151 @@ function turn(angle)
 end
 
 function _update()
-   if btn(⬅️) then
-      turn(turnspeed)
-   elseif btn(➡️) then
-      turn(-turnspeed)
-   end
-   if btn(❎) then
-      car_speed += accel
-   elseif btn(🅾️) then -- brake
-      car_speed -= accel
-   end
-   car_speed -= friction
-   car_speed = max(0, min(maxspeed, car_speed))
-
-   if (car_state == 1) then -- explosion state
-      if car_state_time == explosion_time then
-         car_state = 0
-         car_state_time = 0
+   if game_state == 0 then -- title
+      if btnp(❎) then
+         text_anim_endtime = time() + 2.0
       end
-   elseif (car_state == 0) then -- normal state
-      local dir_x = cos(car_angle)
-      local dir_y = sin(car_angle)
-      local car_front_x = car_x + 4 + dir_x * (car_speed + 5)
-      local car_front_y = car_y + 4 + dir_y * (car_speed + 5)
-      local infront = mget(car_front_x/8, car_front_y/8)
-      local isCollision = false
-      test_infront = {car_front_x, car_front_y}
-      if infront then
-         isCollision = fget(infront, 0)
+      if time() >= text_anim_endtime  then
+         game_state = 1
       end
-      if isCollision then
-         car_speed = 0
-         sfx(0)
-         car_state = 1
-         car_state_time = 0
-      else 
-         local delta_x = dir_x * car_speed
-         local delta_y = dir_y * car_speed
-         car_x += delta_x
-         car_y += delta_y
+   elseif game_state == 1 then -- char select
+      if btnp(⬅️) then
+         char_index = ((char_index - 2) % #char_db) + 1
+      elseif btnp(➡️) then
+         char_index = (char_index % #char_db) + 1
+      elseif btnp(❎) then
+         game_state = 2
       end
+   elseif game_state == 2 then -- car select
+      if btnp(⬅️) then
+         car_index = ((car_index - 2) % #car_db) + 1
+      elseif btnp(➡️) then
+         car_index = (car_index % #car_db) + 1
+      elseif btnp(❎) then
+         game_state = 3
+      end
+   elseif game_state == 3 then -- racing
+      if btn(⬅️) then
+         turn(turnspeed)
+      elseif btn(➡️) then
+         turn(-turnspeed)
+      end
+      if btn(❎) then
+         car_speed += accel
+      elseif btn(🅾️) then -- brake
+         car_speed -= accel
+      end
+      car_speed -= friction
+      car_speed = max(0, min(maxspeed, car_speed))
+   
+      if (car_state == 1) then -- explosion state
+         if car_state_time == explosion_time then
+            car_state = 0
+            car_state_time = 0
+         end
+      elseif (car_state == 0) then -- normal state
+         local dir_x = cos(car_angle)
+         local dir_y = sin(car_angle)
+         local car_front_x = car_x + 4 + dir_x * (car_speed + 5)
+         local car_front_y = car_y + 4 + dir_y * (car_speed + 5)
+         local infront = mget(car_front_x/8, car_front_y/8)
+         local isCollision = false
+         test_infront = {car_front_x, car_front_y}
+         if infront then
+            isCollision = fget(infront, 0)
+         end
+         if isCollision then
+            car_speed = 0
+            sfx(0)
+            car_state = 1
+            car_state_time = 0
+         else 
+            local delta_x = dir_x * car_speed
+            local delta_y = dir_y * car_speed
+            car_x += delta_x
+            car_y += delta_y
+         end
+      end
+      car_state_time += 1
    end
-   car_state_time += 1
 end
 
 function round(x) return flr(x+0.5) end
 function _draw()
    palt(0,false)
-   palt(14,true)
-   cls(6)
-   map(0,0,0,0,128,128)
-   car_sprite_index = min(round(car_angle * #car_sprites) + 1, #car_sprites)
-   --spr(car_sprites[car_sprite_index],car_x,car_y)
-   --draw_rotated_tile(x,y,rot,mx,my,w,flip,scale)
-   draw_rotated_tile(car_x+4,car_y+4,-car_angle-0.25,0,63,1,false,1)
+   palt(2,true)
 
-   if car_state == 1 then
-      expl_sprite_index = min(flr((car_state_time / explosion_time) * #explosion_sprites)+1, #explosion_sprites)
-      spr(explosion_sprites[expl_sprite_index], car_x, car_y)
-   end
+   if game_state == 0 then -- title
+      cls(0)
+      print("grand prix racing", 30, 30)
 
-   pset(test_infront[1],test_infront[2], 13)
-   
+      local blinkrate = 0.25
+      local shouldPrintMsg = text_anim_endtime == 9999 or (time() % blinkrate*2 < blinkrate)
+      if shouldPrintMsg then
+         print("press x to start", 30, 90)
+      end
+   elseif game_state == 1 then -- character select
+      cls(1)
+      local portrait_x, portrait_y, portrait_w, portrait_h = 10, 10, 48, 48
+      local sprindex = char_db[char_index].sprIndex
+      rectfill(portrait_x-2, portrait_y-2, portrait_x+portrait_w+1, portrait_y+portrait_h+1, 4)
+      rectfill(portrait_x-1, portrait_y-1, portrait_x+portrait_w, portrait_y+portrait_h, 5)
+      rectfill(portrait_x, portrait_y, portrait_x+portrait_w-1, portrait_y+portrait_h-1, 7)
+      sspr((sprindex % 16) * 8, (sprindex \ 16) * 8, 8, 8, portrait_x, portrait_y, portrait_w, portrait_h)
+
+      print("name: "..char_db[char_index].name, 64, 10)
+      print("speed: "..char_db[char_index].maxspeed, 64, 20)
+      print("turn: "..round(char_db[char_index].turnspeed*360*30), 64, 30)
+
+      local left, right = 16, 17
+      local left_arrow_x, left_arrow_y, left_arrow_w, left_arrow_h = 0, 96, 32, 32
+      local right_arrow_x, right_arrow_y, right_arrow_w, right_arrow_h = 96, 96, 32, 32
+      sspr((left % 16) * 8, (left \ 16) * 8, 8, 8, left_arrow_x, left_arrow_y, left_arrow_w, left_arrow_h)
+      sspr((right % 16) * 8, (right \ 16) * 8, 8, 8, right_arrow_x, right_arrow_y, right_arrow_w, right_arrow_h)
+      print("select character",32, 112)
+   elseif game_state == 2 then -- car select
+      cls(1)
+      local car_x, car_y, car_w, car_h = 36, 24, 48, 48
+      local sprindex = car_db[car_index].sprIndex
+      rectfill(car_x-2, car_y-2, car_x+car_w+1, car_y+car_h+1, 13)
+      rectfill(car_x, car_y, car_x+car_w-1, car_y+car_h-1, 7)
+      sspr((sprindex % 16) * 8, (sprindex \ 16) * 8, 8, 8, car_x, car_y, car_w, car_h)
+      print(car_db[car_index].name, 48, 10)
+
+      for i=1,#car_colors do
+         local x,y,w,h = 24 + (i-1)*12, 96, 24 + (i-1)*12 + 8, 96 + 8
+         rectfill(x,y,x+w,y+h,car_colors[i])
+      end
+
+      local left, right = 16, 17
+      -- local left_arrow_x, left_arrow_y, left_arrow_w, left_arrow_h = 0, 10, 32, 32
+      -- local right_arrow_x, right_arrow_y, right_arrow_w, right_arrow_h = 96, 10, 32, 32
+      -- sspr((left % 16) * 8, (left \ 16) * 8, 8, 8, left_arrow_x, left_arrow_y, left_arrow_w, left_arrow_h)
+      -- sspr((right % 16) * 8, (right \ 16) * 8, 8, 8, right_arrow_x, right_arrow_y, right_arrow_w, right_arrow_h)
+      spr(16, 32, 10)
+      spr(17, 81, 10)
+      print("select character",32, 112)
+   elseif game_state == 3 then -- racing
+      cls(6)
+      map(0,0,0,0,128,128)
+      car_sprite_index = min(round(car_angle * #car_sprites) + 1, #car_sprites)
+      --spr(car_sprites[car_sprite_index],car_x,car_y)
+      --draw_rotated_tile(x,y,rot,mx,my,w,flip,scale)
+      draw_rotated_tile(car_x+4,car_y+4,-car_angle-0.25,0,63,1,false,1)
+
+      if car_state == 1 then
+         expl_sprite_index = min(flr((car_state_time / explosion_time) * #explosion_sprites)+1, #explosion_sprites)
+         spr(explosion_sprites[expl_sprite_index], car_x, car_y)
+      end
+
+      pset(test_infront[1],test_infront[2], 13)
+   end   
    -- color(11)
    -- print(car_state)
    -- print(car_state_time)
-
 end
+
+function round(x) return flr(x+0.5) end
 
 -- @TheRoboZ https://www.lexaloffle.com/bbs/?pid=78451
 function draw_rotated_tile(x,y,rot,mx,my,w,flip,scale)
@@ -118,22 +222,22 @@ function draw_rotated_tile(x,y,rot,mx,my,w,flip,scale)
 end
 
 __gfx__
-0000000087878787eebbbbeeeee0beeeeeeb0eeeeeeeeeeeeeeeeeeeeebbbbeeeee0beeeeeeb0eeeeeeeeeeeeeeeeeeeeeeeeeee000008800000000000000000
-0000000087878787e0bbbb0eeeebbbeeeebbbeeee00ee00ee00ee00ee0cccc0eeeebbbeeeebbbeeeeeeeeeeeeeeeeeeeeeeeeeee0aaaaa880000000000000000
-0070070087878787e0cccc0eeebccbbeebbcbbeebcbbccbbbbccbbcbe0bbbb0eeebbcbbeebbccbeee8a99a9eeeeeeeee9898a98e0affffa00000000000000000
-0007700087878787eeccccee0bbbccbbbbcbbcb0bcbbccbbbbccbbcbeebbbbee0bcbbcbbbbccbbb0e99a89aeee8a89ae8aa9aa9efa4ff4af0000000000000000
-0007700087878787eebbbbeebbcbbcb00bbbccbbbcbbccbbbbccbbcbeecccceebbccbbb00bcbbcbbe89a789eee9aa78e898778aeaffffffa0000000000000000
-0070070087878787e0bbbb0eebbcbbeeeebccbbebcbbccbbbbccbbcbe0cccc0eebbccbeeeebbcbbee9a9898eee898a9e98798a9eaff88ffa0000000000000000
-0000000087878787e0cccc0eeebbbeeeeeebbbeee00ee00ee00ee00ee0bbbb0eeebbbeeeeeebbbeeeeeeeeeeeeeeeeee8a8a99ae00ffff000000000000000000
-0000000087878787eebbbbeeeeeb0eeeeee0beeeeeeeeeeeeeeeeeeeeebbbbeeeeeb0eeeeee0beeeeeeeeeeeeeeeeeeeeeeeeeeeeeeffeee0000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000008787878722bbbb22220bb02222bbbb22eeeeeeeeeeeeeeeeeebbbbeeeee0beeeeeeb0eee222222222222222222222222222228822222222420000002
+000000008787878720bbbb02222bb22220bccb02e00ee00ee00ee00ee0cccc0eeeebbbeeeebbbeee2222222222222222222222222aaaaa882444444420000002
+007007008787878720cccc0222bccb2220cbbc02bcbbccbbbbccbbcbe0bbbb0eeebbcbbeebbccbee28a99a92222222229898a9822affffa224fffff224444442
+000770008787878722cccc2222cbbc2222bbbb22bcbbccbbbbccbbcbeebbbbee0bcbbcbbbbccbbb0299a89a2228a89a28aa9aa92fa4ff4af24fcfcf244c44c44
+000770008787878722bbbb2220bbbb0222b00b22bcbbccbbbbccbbcbeecccceebbccbbb00bcbbcbb289a7892229aa782898778a2affffffa2ffffff224444442
+007007008787878720bbbb0220bbbb0220b55b02bcbbccbbbbccbbcbe0cccc0eebbccbeeeebbcbbe29a9898222898a9298798a92aff88ffa22feeff2244ee442
+000000008787878720cccc0222bbbb2220b55b02e00ee00ee00ee00ee0bbbb0eeebbbeeeeeebbbee22222222222222228a8a99a222ffff22222ff22222444422
+000000008787878722bbbb222262262222bbbb22eeeeeeeeeeeeeeeeeebbbbeeeeeb0eeeeee0beee222222222222222222222222eeeffeee2888888229966992
+22222222222222220000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+22222222222222220000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+22272222222272220000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+22722222222227220000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+27777772277777720000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+22722222222227220000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+22272222222272220000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+22222222222222220000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
