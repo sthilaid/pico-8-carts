@@ -11,11 +11,17 @@ btn_down    = 3
 btn_o       = 4
 btn_x       = 5
 
-flag_green  = 0
+flag_fairway= 0
 flag_sand   = 1
 flag_turf   = 2
 flag_start  = 6
 flag_hole   = 7
+
+state_idle              = 0
+state_swing_power       = 1
+state_swing_accuracy    = 2
+state_swing_action      = 3
+state_oob               = 4
 
 g_gravity               = -9.8
 g_aim_rot_accel         = 0.1
@@ -59,6 +65,8 @@ g_zoom_ratio    = 1.0
 
 g_ball_x, g_ball_y, g_ball_z    = 0,0,0
 g_ball_vx, g_ball_vy, g_ball_vz = 0,0,0
+g_ball_takeoff_x, g_ball_takeoff_y = 0,0
+g_ball_ground_flags = 1 << flag_fairway
 
 g_frame_offset_x = 0
 g_frame_offset_y = 0
@@ -107,6 +115,7 @@ function _update()
 
    update_state_transitions()
    update_state(dt)
+   g_stateTime += dt
 end
 
 function _draw()
@@ -120,11 +129,6 @@ end
 
 -->8
 -- input & states
-
-state_idle              = 0
-state_swing_power       = 1
-state_swing_accuracy    = 2
-state_swing_action      = 3
 
 function calcSwingPower()
    if (g_clubs[g_club_index].powerTarget < 0) return g_swing_power
@@ -143,7 +147,7 @@ function calcSwingAngle()
    local total_range = g_swing_power - (target + range)
    local outrangeRatio = clamp(0,1,invlerp(0, total_range, abs(delta) - range))
    local precisionAnglePenality = lerp(0.001, 0.125, outrangeRatio)
-   local precisionDir = (rnd() > 0.5 and 1) or -1
+   local precisionDir = sgn(delta) -- (rnd() > 0.5 and 1) or -1
    local finalAngle = standardize_angle(g_aim_angle + precisionDir * precisionAnglePenality)
    -- print(g_swing_accuracy,0,40)
    -- print(outrangeRatio)
@@ -153,13 +157,27 @@ function calcSwingAngle()
    return finalAngle
 end
 
+function get_ball_flags()
+   local px,py = g_ball_x * g_course.worldPixelRatio, g_ball_y * g_course.worldPixelRatio
+   local mx,my = g_course.x0 + px \ 8, g_course.y0 + py \ 8
+   local isOOB = (mx < g_course.x0) or (mx > g_course.x0+g_course.w) or (my < g_course.y0) or (my > g_course.y0+g_course.w)
+   if (isOOB) return 0
+   return fget(mget(mx,my))
+end
+
 function transitionTo(newstate)
+   local prevState = g_state
    g_state = newstate
    g_stateTime = 0
 
    -- on enter state
    if newstate == state_idle then
       g_swing_power, g_swing_accuracy = 0,0
+
+      if prevState == state_oob then
+         g_ball_x, g_ball_y = g_ball_takeoff_x, g_ball_takeoff_y
+         g_aim_angle = -0.25
+      end
       
    elseif newstate == state_swing_accuracy then
       g_swing_accuracy = g_swing_power
@@ -175,6 +193,7 @@ function transitionTo(newstate)
       local speed       = dist / airTime
       g_ball_vx, g_ball_vy = speed * cos(shotAngle), speed * sin(shotAngle)
       g_ball_vz         = sqrt(-2*height*g_gravity)
+      g_ball_takeoff_x, g_ball_takeoff_y = g_ball_x, g_ball_y
       -- print("pos: "..g_ball_x..","..g_ball_y..","..g_ball_z)
       -- print("vel: "..g_ball_vx..","..g_ball_vy..","..g_ball_vz)
       --print("powerRatio:"..powerRatio,0,4)
@@ -196,6 +215,8 @@ function update_state_transitions(dt)
       if btn(btn_x) then
          transitionTo(state_swing_action)
       end
+   elseif g_state == state_oob then
+      if (g_stateTime > 3) transitionTo(state_idle)
    end
 end
 
@@ -230,7 +251,10 @@ function update_state(dt)
       if g_ball_z < 0 then
          g_ball_z = 0
          g_ball_vx, g_ball_vy, g_ball_vz = 0,0,0 -- no bounces for now
-         transitionTo(state_idle)
+         g_ball_ground_flags = get_ball_flags()
+         if g_ball_ground_flags == 0 then   transitionTo(state_oob)
+         else                               transitionTo(state_idle)
+         end
       else
          g_ball_vz = g_ball_vz + g_gravity * dt
       end
@@ -270,13 +294,27 @@ function drawball()
    circfill(ballx, bally, ballr, 7)
 end
 
+function drawClubHud()
+   line(0,120,127,120,6)
+   rectfill(0,121,127,127,14)
+   local clubstr = "club: "..g_clubs[g_club_index].name
+   color(5)
+   -- print(clubstr,2,122)
+   color(7)
+   print(clubstr,1,122)
+end
+function drawAimHud()
+   local pixeldist = g_clubs[g_club_index].maxdist * g_course.worldPixelRatio * g_zoom_ratio
+   local ballx, bally = worldToPixel(g_ball_x, g_ball_y)
+   local x0,y0 = ballx, bally
+   local x1,y1 = x0 + cos(g_aim_angle) * pixeldist, y0 + sin(g_aim_angle) * pixeldist
+   line(x0,y0, x1,y1, 7)
+end
 function drawhud()
+   drawClubHud()
+
    if g_state == state_idle then
-      local pixeldist = g_clubs[g_club_index].maxdist * g_course.worldPixelRatio * g_zoom_ratio
-      local ballx, bally = worldToPixel(g_ball_x, g_ball_y)
-      local x0,y0 = ballx, bally
-      local x1,y1 = x0 + cos(g_aim_angle) * pixeldist, y0 + sin(g_aim_angle) * pixeldist
-      line(x0,y0, x1,y1, 7)
+      drawAimHud()
       
    elseif g_state == state_swing_power or g_state == state_swing_accuracy then
       local x0,y0,w,h = 115,64,8,48
@@ -309,20 +347,18 @@ function drawhud()
          local accuracyRatio = 1.0 - g_swing_accuracy
          line(x0-currentPad,y0+h*accuracyRatio,x0+w+currentPad,y0+h*accuracyRatio,10)
       end
+   elseif g_state == state_oob then
+      color(7)
+      print("o.o.b.", 64,64)
    end
 end
 
 function drawdebug()
-   color(7)
-   -- print("s:"..g_state.." d:"..g_aim_angle.." p:"..g_swing_power.." a:"..g_swing_accuracy)
+   cursor(0,0,7)
+   print("s:"..g_state.." d:"..g_aim_angle.." p:"..g_swing_power.." a:"..g_swing_accuracy)
    -- print("pos: "..format(g_ball_x)..","..format(g_ball_y)..","..format(g_ball_z))
    -- print("vel: "..format(g_ball_vx)..","..format(g_ball_vy)..","..format(g_ball_vz))
-   line(0,120,127,120,6)
-   rectfill(0,121,127,127,14)
-   color(5)
-   print("club: "..g_clubs[g_club_index].name,2,122)
-   color(7)
-   print("club: "..g_clubs[g_club_index].name,1,122)
+   print("flags: "..g_ball_ground_flags)
 end
 
 -->8
@@ -388,12 +424,12 @@ bbbbbbbbbbb6bbbbbbb33333bb333333333333bb33333bbb0000000033399aaa3399aaaaaaaa9933
 bbbbbbbbbb333bbbb3333333bbbbbb3333bbbbbb3333333b00000000399aaaaa3333339999333333aaaaaa93aaaaaaaa00000000000000000000000000000000
 bbbbbbbbbbbbbbbbb3333333bbbbbbbbbbbbbbbb3333333b0000000039aaaaaa3333333333333333aaaaaa93aaaaaaaa00000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000030000003003003000300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+03003000000303000030030000303000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00300300003000300300300000030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00030030000030000030030003000300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00300300000303000003003000303000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+03003000003000300000000000030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
