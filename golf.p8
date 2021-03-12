@@ -160,7 +160,7 @@ end
 function get_ball_flags()
    local px,py = g_ball_x * g_course.worldPixelRatio, g_ball_y * g_course.worldPixelRatio
    local mx,my = g_course.x0 + px \ 8, g_course.y0 + py \ 8
-   local isOOB = (mx < g_course.x0) or (mx > g_course.x0+g_course.w) or (my < g_course.y0) or (my > g_course.y0+g_course.w)
+   local isOOB = (mx < g_course.x0) or (mx > g_course.x0+g_course.w) or (my < g_course.y0) or (my > g_course.y0+g_course.h)
    if (isOOB) return 0
    return fget(mget(mx,my))
 end
@@ -350,6 +350,7 @@ function drawhud()
    elseif g_state == state_oob then
       color(7)
       print("o.o.b.", 64,64)
+      
    end
 end
 
