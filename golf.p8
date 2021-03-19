@@ -17,11 +17,18 @@ flag_turf   = 2
 flag_start  = 6
 flag_hole   = 7
 
+flag_green_right    = 1
+flag_green_up       = 2
+flag_green_left     = 3
+flag_green_down     = 4
+
 state_idle              = 0
 state_swing_power       = 1
 state_swing_accuracy    = 2
-state_swing_action      = 3
+state_airborn           = 3
 state_oob               = 4
+state_green             = 5
+state_rolling           = 6
 
 g_gravity               = -9.8
 g_aim_rot_accel         = 0.1
@@ -30,6 +37,8 @@ g_accuracy_accel        = 0.5
 g_zoom_accel            = 0.3
 g_swing_power_target    = 0.85
 g_swing_accuracy_target = 0.15
+g_min_zoom_ratio        = 0.1
+g_max_zoom_ratio        = 3
 
 -- stats from https://blog.trackmangolf.com/trackman-average-tour-stats/
 function make_club(name, maxdist, maxheight, powerTarget, powerTargetRange, accTarget, accTargetRange)
@@ -49,8 +58,8 @@ g_clubs     = { make_club("driver", 275, 32, 0.9, 0.01, 0.1, 0.01),
                 make_club("8 iron", 160, 31, 0.8, 0.05, 0.2, 0.03),
                 make_club("9 iron", 148, 30, 0.8, 0.05, 0.2, 0.03),
                 make_club("pw", 100, 29, 0.8, 0.1, 0.1, 0.04),
-                make_club("putter", 50, 0, -1, -1, -1, -1),
 }
+g_putter    = make_club("putter", 50, 0, 1, 0, 0, 1)
 
 -- global state variables
 g_lastFrameTime = 0
@@ -130,21 +139,21 @@ end
 -->8
 -- input & states
 
-function calcSwingPower()
-   if (g_clubs[g_club_index].powerTarget < 0) return g_swing_power
+function calcSwingPower(clubdata)
+   if (clubdata.powerTarget < 0) return g_swing_power
 
-   local target, range = g_clubs[g_club_index].powerTarget, g_clubs[g_club_index].powerTargetRange
+   local target, range = clubdata.powerTarget, clubdata.powerTargetRange
    local delta = g_swing_power - target
    if (abs(delta) < range) return 1.0
    local outrangeRatio = clamp(0,1,invlerp(0, 1-range, g_swing_power))
    return lerp(0.1, 1.0, outrangeRatio) -- should add min ratio (0.1) to club data?
 end
 
-function calcSwingAngle()
-   local target,range = g_clubs[g_club_index].accTarget, g_clubs[g_club_index].accTargetRange
+function calcSwingAngle(clubdata)
+   local target,range = clubdata.accTarget, clubdata.accTargetRange
    local delta = g_swing_accuracy - target
    if (abs(delta) < range) return g_aim_angle
-   local total_range = g_swing_power - (target + range)
+   local total_range = g_swing_accuracy - (target + range)
    local outrangeRatio = clamp(0,1,invlerp(0, total_range, abs(delta) - range))
    local precisionAnglePenality = lerp(0.001, 0.125, outrangeRatio)
    local precisionDir = sgn(delta) -- (rnd() > 0.5 and 1) or -1
@@ -160,9 +169,14 @@ end
 function get_ball_flags()
    local px,py = g_ball_x * g_course.worldPixelRatio, g_ball_y * g_course.worldPixelRatio
    local mx,my = g_course.x0 + px \ 8, g_course.y0 + py \ 8
-   local isOOB = (mx < g_course.x0) or (mx > g_course.x0+g_course.w) or (my < g_course.y0) or (my > g_course.y0+g_course.h)
+   local isOOB = (mx <= g_course.x0) or (mx >= g_course.x0+g_course.w) or (my <= g_course.y0) or (my >= g_course.y0+g_course.h)
    if (isOOB) return 0
    return fget(mget(mx,my))
+end
+
+function is_green(flags)
+   if (flags & 1<<flag_fairway == 0) return false
+   return (flags & (1<<flag_green_right | 1<<flag_green_up | 1<<flag_green_left | 1<<flag_green_down)) != 0
 end
 
 function transitionTo(newstate)
@@ -171,7 +185,7 @@ function transitionTo(newstate)
    g_stateTime = 0
 
    -- on enter state
-   if newstate == state_idle then
+   if newstate == state_idle or newstate == state_green then
       g_swing_power, g_swing_accuracy = 0,0
 
       if prevState == state_oob then
@@ -182,12 +196,12 @@ function transitionTo(newstate)
    elseif newstate == state_swing_accuracy then
       g_swing_accuracy = g_swing_power
 
-   elseif newstate == state_swing_action then
+   elseif newstate == state_airborn then
       local maxdist     = g_clubs[g_club_index].maxdist
       local maxheight   = g_clubs[g_club_index].maxheight
       --local powerRatio  = lerp(0.5, 1.0, invlerp(-0.4, 0, g_swing_power - g_swing_power_target))
-      local powerRatio  = calcSwingPower()
-      local shotAngle   = calcSwingAngle()
+      local powerRatio  = calcSwingPower(g_clubs[g_club_index])
+      local shotAngle   = calcSwingAngle(g_clubs[g_club_index])
       local dist,height = powerRatio * maxdist, powerRatio * maxheight
       local airTime     = sqrt(-8 * height / g_gravity)
       local speed       = dist / airTime
@@ -201,19 +215,31 @@ function transitionTo(newstate)
       -- print("airtime:"..airTime)
       -- print("vz: "..vz.." | "..g_ball_vz)
       --stop()
+   elseif newstate == state_rolling then
+      local maxspeed     = g_putter.maxdist / 5 -- dist over 5 secs
+      local powerRatio  = calcSwingPower(g_putter)
+      local shotAngle   = calcSwingAngle(g_putter)
+      local speed        = powerRatio * maxspeed
+      g_ball_vx, g_ball_vy = speed * cos(shotAngle), speed * sin(shotAngle)
+      g_ball_vz         = 0
+      g_ball_takeoff_x, g_ball_takeoff_y = g_ball_x, g_ball_y
+      -- print("vx: "..g_ball_vx.." vy: "..g_ball_vy)
+      -- stop()
    end
 end
 
 function update_state_transitions(dt)
-   if g_state == state_idle then
+   if g_state == state_idle or g_state == state_green then
       if (btnp(btn_x)) transitionTo(state_swing_power)
    elseif g_state == state_swing_power then
       if not btn(btn_x) then
-         transitionTo(state_swing_accuracy)
+         if is_green(g_ball_ground_flags) then  transitionTo(state_rolling)
+         else                                   transitionTo(state_swing_accuracy)
+         end
       end
    elseif g_state == state_swing_accuracy then
       if btn(btn_x) then
-         transitionTo(state_swing_action)
+         transitionTo(state_airborn)
       end
    elseif g_state == state_oob then
       if (g_stateTime > 3) transitionTo(state_idle)
@@ -221,7 +247,7 @@ function update_state_transitions(dt)
 end
 
 function update_state(dt)
-   if g_state == state_idle then
+   if g_state == state_idle or g_state == state_green then
       local dir = 0
       if (btn(btn_right))   dir = 1
       if (btn(btn_left))    dir = -1
@@ -229,8 +255,8 @@ function update_state(dt)
          g_aim_angle = standardize_angle(g_aim_angle + dir * g_aim_rot_accel * dt)
       end
       if btn(btn_o) then
-         if (btn(btn_up))     g_zoom_ratio = clamp(0.1, 3, g_zoom_ratio + g_zoom_accel * dt)
-         if (btn(btn_down))   g_zoom_ratio = clamp(0.1, 3, g_zoom_ratio - g_zoom_accel * dt)
+         if (btn(btn_up))     g_zoom_ratio = clamp(g_min_zoom_ratio, g_max_zoom_ratio, g_zoom_ratio + g_zoom_accel * dt)
+         if (btn(btn_down))   g_zoom_ratio = clamp(g_min_zoom_ratio, g_max_zoom_ratio, g_zoom_ratio - g_zoom_accel * dt)
       else
          if (btnp(btn_up))    g_club_index = clamp(1,#g_clubs, g_club_index-1)
          if (btnp(btn_down))  g_club_index = clamp(1,#g_clubs, g_club_index+1)
@@ -244,7 +270,7 @@ function update_state(dt)
    elseif g_state == state_swing_accuracy then
       g_swing_accuracy = clamp(0,1, g_swing_accuracy - g_accuracy_accel * dt)
 
-   elseif g_state == state_swing_action then
+   elseif g_state == state_airborn then
       g_ball_x, g_ball_y = g_ball_x + g_ball_vx * dt, g_ball_y + g_ball_vy * dt
       g_ball_z = g_ball_z + g_ball_vz * dt
 
@@ -252,33 +278,60 @@ function update_state(dt)
          g_ball_z = 0
          g_ball_vx, g_ball_vy, g_ball_vz = 0,0,0 -- no bounces for now
          g_ball_ground_flags = get_ball_flags()
-         if g_ball_ground_flags == 0 then   transitionTo(state_oob)
-         else                               transitionTo(state_idle)
+         if g_ball_ground_flags == 0 then           transitionTo(state_oob)
+         elseif is_green(g_ball_ground_flags ) then transitionTo(state_green)
+         else                                       transitionTo(state_idle)
          end
       else
          g_ball_vz = g_ball_vz + g_gravity * dt
+      end
+   elseif g_state == state_rolling then
+      g_ball_x, g_ball_y = g_ball_x + g_ball_vx * dt, g_ball_y + g_ball_vy * dt
+
+      local sqdist = g_ball_vx * g_ball_vx + g_ball_vy * g_ball_vy
+      if sqdist < 0.1 then
+         g_ball_vx, g_ball_vy = 0,0
+         g_ball_ground_flags = get_ball_flags()
+         if g_ball_ground_flags == 0 then           transitionTo(state_oob)
+         elseif is_green(g_ball_ground_flags ) then transitionTo(state_green)
+         else                                       transitionTo(state_idle)
+         end
+      else
+         local frictionDecay,minFrictionSpeed = 0.1, 0.1
+         local sx,sy = sgn(g_ball_vx), sgn(g_ball_vy)
+         g_ball_vx = g_ball_vx + (-1*sx)* max(minFrictionSpeed, frictionDecay * g_ball_vx)
+         g_ball_vy = g_ball_vy + (-1*sy)* max(minFrictionSpeed, frictionDecay * g_ball_vy)
+         if (sx != sgn(g_ball_vx)) g_ball_vx = 0
+         if (sy != sgn(g_ball_vy)) g_ball_vy = 0
       end
    end
 end
 
 -->8
 -- draw
+function getZoom()
+   local isOnGreen = is_green(g_ball_ground_flags)
+   return (isOnGreen and g_max_zoom_ratio) or g_zoom_ratio
+end
 function worldToPixel(x,y)
-   local zoomedPixelRatio = g_course.worldPixelRatio * g_zoom_ratio
+   local zoomedPixelRatio = g_course.worldPixelRatio * getZoom()
    local wx,wy = x * zoomedPixelRatio - g_frame_offset_x, y * zoomedPixelRatio - g_frame_offset_y
    return wx,wy
 end
 
 function update_frame_offset()
-   local zoomedPixelratio = g_course.worldPixelRatio * g_zoom_ratio
+   local zoom = getZoom()
+   local zoomedPixelratio = g_course.worldPixelRatio * zoom
    local ballPX, ballPY = g_ball_x * zoomedPixelratio, g_ball_y * zoomedPixelratio
    local cx, cy = 64 + cos(g_aim_angle+0.5) * 42, 64 + sin(g_aim_angle+0.5) * 42
-   g_frame_offset_x = clamp(0, max(0,g_course.w*8*g_zoom_ratio - 128), ballPX - cx)
-   g_frame_offset_y = clamp(0, max(0,g_course.h*8*g_zoom_ratio - 128), ballPY - cy)
+   g_frame_offset_x = clamp(0, max(0,g_course.w*8*zoom - 128), ballPX - cx)
+   g_frame_offset_y = clamp(0, max(0,g_course.h*8*zoom - 128), ballPY - cy)
 end
 
 function drawcourse(course)
-   local pixelsPerSprite = 8 * g_zoom_ratio
+   local isGreen = g_state == state_green
+   local zoom = getZoom()
+   local pixelsPerSprite = 8 * zoom
    local offset_x, offset_y = g_frame_offset_x / pixelsPerSprite, g_frame_offset_y / pixelsPerSprite
    local width  = min(127, g_course.w * pixelsPerSprite - g_frame_offset_x)
    local height = min(127, g_course.h * pixelsPerSprite - g_frame_offset_y)
@@ -297,14 +350,16 @@ end
 function drawClubHud()
    line(0,120,127,120,6)
    rectfill(0,121,127,127,14)
-   local clubstr = "club: "..g_clubs[g_club_index].name
+   local isgreen = is_green(g_ball_ground_flags)
+   local club = (isgreen and g_putter) or g_clubs[g_club_index]
+   local clubstr = "club: "..club.name
    color(5)
    -- print(clubstr,2,122)
    color(7)
    print(clubstr,1,122)
 end
 function drawAimHud()
-   local pixeldist = g_clubs[g_club_index].maxdist * g_course.worldPixelRatio * g_zoom_ratio
+   local pixeldist = g_clubs[g_club_index].maxdist * g_course.worldPixelRatio * getZoom()
    local ballx, bally = worldToPixel(g_ball_x, g_ball_y)
    local x0,y0 = ballx, bally
    local x1,y1 = x0 + cos(g_aim_angle) * pixeldist, y0 + sin(g_aim_angle) * pixeldist
@@ -313,9 +368,9 @@ end
 function drawhud()
    drawClubHud()
 
-   if g_state == state_idle then
+   if g_state == state_idle or g_state == state_green then
       drawAimHud()
-      
+
    elseif g_state == state_swing_power or g_state == state_swing_accuracy then
       local x0,y0,w,h = 115,64,8,48
       local currentPad,targetPad = 3,1
@@ -357,6 +412,7 @@ end
 function drawdebug()
    cursor(0,0,7)
    print("s:"..g_state.." d:"..g_aim_angle.." p:"..g_swing_power.." a:"..g_swing_accuracy)
+   print("vx:"..g_ball_vx.." vy:"..g_ball_vy)
    -- print("pos: "..format(g_ball_x)..","..format(g_ball_y)..","..format(g_ball_z))
    -- print("vel: "..format(g_ball_vx)..","..format(g_ball_vy)..","..format(g_ball_vz))
    print("flags: "..g_ball_ground_flags)
@@ -406,6 +462,7 @@ function standardize_angle(angle)
 end
 function lerp(a,b,ratio) return (b-a)*ratio + a end
 function invlerp(a,b,v) return (v-a) / (b-a) end
+function pbool(x) return x and "true" or "false" end
 
 __gfx__
 00000000bbbbbbbb333333333bbbbbbbbbbbbbb333333333aaaaaaaabbbbbb3339aaaaaaaaaaaa9333bbbbbb3333333339aaaaaaaaaaaaaaaaaaaa9333333333
@@ -424,14 +481,14 @@ bbbbbbbbbbb6bbbbbbb33333bb333333333333bb33333bbb0000000033399aaa3399aaaaaaaa9933
 77bbbb77bb363bbbbb333333bbbb33333333bbbb333333bb00000000339aaaaa3333999aaa993333aaaaa933aaaaaaaa00000000000000000000000000000000
 bbbbbbbbbb333bbbb3333333bbbbbb3333bbbbbb3333333b00000000399aaaaa3333339999333333aaaaaa93aaaaaaaa00000000000000000000000000000000
 bbbbbbbbbbbbbbbbb3333333bbbbbbbbbbbbbbbb3333333b0000000039aaaaaa3333333333333333aaaaaa93aaaaaaaa00000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000030000003003003000300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-03003000000303000030030000303000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00300300003000300300300000030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00030030000030000030030003000300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00300300000303000003003000303000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-03003000003000300000000000030000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000
+00000000000030000003003003000300bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000
+03003000000303000030030000303000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000
+00300300003000300300300000030000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000
+00030030000030000030030003000300bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000
+00300300000303000003003000303000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000
+03003000003000300000000000030000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
@@ -500,7 +557,7 @@ f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f00000000000000000000000000000
 __gff__
-0001010101010202020202020202020441810101010100020202020200000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000101010101020202020202020202044181010101010002020202020000000000000000030509111f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 __map__
 0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f
@@ -531,7 +588,7 @@ __map__
 0f0f0f0f0f0f0f0f030101040f18190f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-0f0f0f0f0f0f0f0f020101050f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-0f0f0f0f0f0f0f0f011101010f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-0f0f0f0f0f0f0f0f030101040f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0f0f0f0f0f0f0f0f022828050f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0f0f0f0f0f0f0f0f011126260f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+0f0f0f0f0f0f0f0f032828040f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
