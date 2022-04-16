@@ -20,7 +20,7 @@ function _init()
    p=make_boat(64, 64)
    wind={dir=rnd(1), str=rnd(max_wind)}
    for i=1,30 do
-      add(waves, make_wave())
+      add(waves, make_wave(64,64))
    end
 end
 
@@ -34,10 +34,15 @@ end
 
 function _draw()
    cls(12)
+
+   camera(p.x-64, p.y-64)
    draw_waves()
    draw_windtrails()
-   draw_rotated_tile(p.x, p.y, -p.dir, 0, 0, 1, false, 1)
-   draw_rotated_tile(p.x, p.y, -wind.dir, 2, 0, 1, false, 1)
+
+   draw_rotated_tile(p.x, p.y, -p.dir, 0, 0, 1, false, 2)
+   draw_rotated_tile(p.x, p.y, -wind.dir, 2, 0, 1, false, 2)
+
+   camera()
    print("wind: "..wind.dir.." "..wind.str)
    print("p: "..p.speed.." "..p.dir.." "..p.v)
 end
@@ -45,7 +50,7 @@ end
 -->8
 -- inputs and controls
 function make_boat(x,y)
-   return {x=x, y=y, speed=0, v=0, dir=0}
+   return {x=x, y=y, speed=0, v=0, dir=0, rx=0, ry=0}
 end
 function update_inputs()
    if btn(0) then -- left
@@ -68,17 +73,22 @@ function update_boat(boat)
    else
       boat.v = cos(delta_angle) * wind.str * boat.speed * speed_mult
    end
-   boat.x += cos(boat.dir) * boat.v
-   boat.y += sin(boat.dir) * boat.v
+   -- apply only integer delta values and re-apply the rest the next frame
+   dx, dy = p.rx + cos(boat.dir) * boat.v, p.ry + sin(boat.dir) * boat.v
+   fdx, fdy = flr(dx), flr(dy)
+   p.rx, p.ry = dx - fdx, dy - fdy
+   boat.x += fdx
+   boat.y += fdy
 end
 
 -->8
 -- water and wind effects
 
-function make_wave()
+function make_wave(cx, cy)
    speed = rnd(90)+60
-   return {x=rnd(128), y=rnd(128), state=0, substate=rnd(speed), speed=speed, lifetime=rnd(15)}
+   return {x=cx+rnd(128)-64, y=cy+rnd(128)-64, state=0, substate=rnd(speed), speed=speed}
 end
+
 
 function update_waves()
    for i=1,count(waves) do
@@ -87,10 +97,13 @@ function update_waves()
       if w.substate >= w.speed then
          w.substate = 0
          w.state += 1
-         if w.state >= w.lifetime then
-            waves[i] = make_wave()
-         end
       end
+      -- loop the waves around the player
+      dx, dy = w.x - p.x, w.y - p.y
+      if (dx > 64) w.x -= 128
+      if (dx < -64) w.x += 128
+      if (dy > 64) w.y -= 128
+      if (dy < -64) w.y += 128
    end
 end
 
