@@ -3,15 +3,20 @@ version 35
 __lua__
 
 -- main
+dt=1/30
+g=-9.8/30 -- gravity for 1 frame
 p={}
 wind={}
 waves={}
 windtrails={}
+cannonballs={}
 next_windrail=0
 
 speed_mult=0.1
 max_speed=2
 rot_speed=0.01
+max_cannonball_dist=40
+max_cannonball_halfdist=max_cannonball_dist * 0.5
 max_wind=5
 wave_sprites={4,5,6,5}
 wave_sprites_count=count(wave_sprites)
@@ -25,9 +30,10 @@ function _init()
 end
 
 function _update()
+   update_wind()
    update_inputs()
    update_boat(p)
-   update_wind()
+   update_cannonballs()
    update_waves()
    update_windtrails()
 end
@@ -37,14 +43,17 @@ function _draw()
 
    camera(p.x-64, p.y-64)
    draw_waves()
+   draw_boat(p)
+   draw_cannonballs()
    draw_windtrails()
-
-   draw_rotated_tile(p.x, p.y, -p.dir, 0, 0, 1, false, 2)
-   draw_rotated_tile(p.x, p.y, -wind.dir, 2, 0, 1, false, 2)
 
    camera()
    print("wind: "..wind.dir.." "..wind.str)
    print("p: "..p.speed.." "..p.dir.." "..p.v)
+   if count(cannonballs) > 0 then
+      local ball = cannonballs[1]
+      print("[ball] x: "..ball.x.." y: "..ball.y.." d: "..ball.dist.." state: "..ball.state)
+   end
 end
 
 -->8
@@ -62,30 +71,85 @@ function update_inputs()
    elseif btnp(3) then -- down
       p.speed -= 1
    end
+   if btnp(4) then -- square
+      make_cannonball(p, -1)
+   end
+   if btnp(5) then -- X
+      make_cannonball(p, 1)
+   end
    p.dir = normalize_angle(p.dir)
    p.speed = min(max_speed, max(0, p.speed))
 end
 
 function update_boat(boat)
-   delta_angle = shortest_angle_between_normalized(boat.dir, wind.dir)
-   if delta_angle > 0.25 then
-      boat.v = 0
-   else
-      boat.v = cos(delta_angle) * wind.str * boat.speed * speed_mult
-   end
+   local delta_angle = shortest_angle_between_normalized(boat.dir, wind.dir)
+   -- boat movement vs wind inspired from:
+   -- https://sailing-blog.nauticed.org/sailboat-speed-versus-sailing-angle/
+   local boat_min_speed = 0.5 * wind.str * boat.speed * speed_mult
+   local boat_max_speed = 1.5 * wind.str * boat.speed * speed_mult
+   boat.v = boat_min_speed + (boat_max_speed - boat_min_speed) * -1 * sin(delta_angle)
    -- apply only integer delta values and re-apply the rest the next frame
-   dx, dy = p.rx + cos(boat.dir) * boat.v, p.ry + sin(boat.dir) * boat.v
-   fdx, fdy = flr(dx), flr(dy)
+   local dx, dy = p.rx + cos(boat.dir) * boat.v, p.ry + sin(boat.dir) * boat.v
+   local fdx, fdy = flr(dx), flr(dy)
    p.rx, p.ry = dx - fdx, dy - fdy
    boat.x += fdx
    boat.y += fdy
+end
+
+function draw_boat(boat)
+   draw_rotated_tile(boat.x, boat.y, -boat.dir, 0, 0, 1, false, 1.5)
+   draw_rotated_tile(boat.x, boat.y, -wind.dir, 2, 0, 1, false, 1.5)
+end
+
+-- states: [0: inair] [1: splash] [2: hit]
+function make_cannonball(boat, side)
+   local dir = normalize_angle(boat.dir+side*0.25)
+   add(cannonballs, {x=boat.x, y=boat.y, dir=dir, v=1.0, dist=0, state=0, state_t=0})
+end
+
+function update_cannonballs()
+   local toremove={}
+   for i=1,count(cannonballs) do
+      local ball = cannonballs[i]
+      if ball.state == 0 then -- inair
+         local dx, dy = ball.v*cos(ball.dir), ball.v*sin(ball.dir)
+         -- todo: detect collision if z is withing detection threshold
+         ball.x += dx
+         ball.y += dy
+         ball.dist += sqrt(dx*dx + dy*dy)
+         if ball.dist > max_cannonball_dist then
+            ball.state = 1
+         end
+      elseif ball.state == 1 then -- splash
+         if ball.state_t < 30 then
+            ball.state_t +=1
+         else
+            add(toremove, i)
+         end
+      end
+   end
+   for i in all(toremove) do
+      deli(cannonballs, i)
+   end
+end
+
+function draw_cannonballs()
+   for ball in all(cannonballs) do
+      if ball.state == 0 then -- inair
+         local middist = abs(ball.dist - max_cannonball_halfdist)
+         local r = lerp(2,5,invlerp(middist,max_cannonball_halfdist,0))
+         circfill(ball.x, ball.y, r, 5)
+      elseif ball.state == 1 then -- splash
+         circfill(ball.x, ball.y, 2, 6) -- temp, to replace with sprite anim
+      end
+   end
 end
 
 -->8
 -- water and wind effects
 
 function make_wave(cx, cy)
-   speed = rnd(90)+60
+   local speed = rnd(90)+60
    return {x=cx+rnd(128)-64, y=cy+rnd(128)-64, state=0, substate=rnd(speed), speed=speed}
 end
 
@@ -99,7 +163,7 @@ function update_waves()
          w.state += 1
       end
       -- loop the waves around the player
-      dx, dy = w.x - p.x, w.y - p.y
+      local dx, dy = w.x - p.x, w.y - p.y
       if (dx > 64) w.x -= 128
       if (dx < -64) w.x += 128
       if (dy > 64) w.y -= 128
@@ -121,7 +185,7 @@ function update_wind()
 end
 
 function make_windtrail()
-   add(windtrails, {x0=64+rnd(48)-24, y0=64+rnd(48)-24, life=0, length=0, maxlen=rnd(10)+3, maxdist=rnd(30)+15, dir=wind.dir})
+   add(windtrails, {x0=p.x+rnd(48)-24, y0=p.y+rnd(48)-24, life=0, length=0, maxlen=rnd(10)+3, maxdist=rnd(30)+15, dir=wind.dir})
 end
 
 function update_windtrails()
@@ -131,15 +195,15 @@ function update_windtrails()
       next_windrail = rnd(30)+30
    end
 
-   toremove={}
-   trailcount = count(windtrails)
+   local toremove={}
+   local trailcount = count(windtrails)
    for i=1,trailcount do
-      w = windtrails[i]
+      local w = windtrails[i]
       if w.length >= w.maxdist then
          add(toremove, i)
       else
          w.life +=1
-         mod = (max_wind - ceil(wind.str)) + 1
+         local mod = (max_wind - ceil(wind.str)) + 1
          if w.life % mod == 0 then
             w.length += 1
          end
@@ -152,9 +216,9 @@ end
 
 function draw_windtrails()
    for w in all(windtrails) do
-      l0 = max(0, w.length - w.maxlen)
-      x0,y0 = w.x0 + cos(w.dir) * l0, w.y0 + sin(w.dir) * l0
-      x1,y1 = w.x0 + cos(w.dir) * w.length, w.y0 + sin(w.dir) * w.length
+      local l0 = max(0, w.length - w.maxlen)
+      local x0,y0 = w.x0 + cos(w.dir) * l0, w.y0 + sin(w.dir) * l0
+      local x1,y1 = w.x0 + cos(w.dir) * w.length, w.y0 + sin(w.dir) * w.length
       line(x0, y0, x1, y1, 6)
    end
 end
@@ -162,7 +226,7 @@ end
 -->8
 -- utils
 function normalize_angle(a)
-   extra = flr(abs(a))
+   local extra = flr(abs(a))
    if a > 1 then
       a -= extra
    elseif a < 0 then
@@ -175,12 +239,21 @@ function shortest_angle_between_normalized(a1, a2)
    if a1 > a2 then
       a1,a2 = a2, a1
    end
-   delta = a2 - a1
+   local delta = a2 - a1
    if delta < 0.5 then
       return delta
    else
       return 1.0 - delta
    end
+end
+
+function lerp(a, b, ratio)
+   local delta = b-a
+   return a + delta * ratio
+end
+
+function invlerp(val, a, b)
+   return (val - a) / (b - a)
 end
 
 -- @TheRoboZ https://www.lexaloffle.com/bbs/?pid=78451
