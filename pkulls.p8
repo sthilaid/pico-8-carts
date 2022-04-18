@@ -6,11 +6,18 @@ __lua__
 dt=1/30
 g=-9.8/30 -- gravity for 1 frame
 p={}
+boats={}
 wind={}
 waves={}
 windtrails={}
 cannonballs={}
 next_windrail=0
+was_colliding=false
+col_grace_period=0
+camshake=nil
+
+should_debug_col = false
+debug_coll={}
 
 speed_mult=0.1
 max_speed=2
@@ -20,13 +27,23 @@ max_cannonball_halfdist=max_cannonball_dist * 0.5
 max_wind=5
 wave_sprites={4,5,6,5}
 wave_sprites_count=count(wave_sprites)
+splash_duration=45
+splash_frames={10,11,12,13,14,15}
+expl_duration=20
+expl_frames={16,17,18,19,20,21,22}
 
 function _init()
    p=make_boat(64, 64)
-   wind={dir=rnd(1), str=rnd(max_wind)}
+   wind={dir=rnd(1), str=2+rnd(max_wind-2)}
    for i=1,30 do
       add(waves, make_wave(64,64))
    end
+   for i=1,20 do
+      add(boats, make_boat(rnd(256)-128, rnd(256)-128))
+   end
+
+   pal(2, 132, 1) -- swap purple for dark brown
+   pal(3, 140, 1) -- swap dark green for dark blue
 end
 
 function _update()
@@ -36,45 +53,52 @@ function _update()
    update_cannonballs()
    update_waves()
    update_windtrails()
+   update_camshake()
 end
 
 function _draw()
-   cls(12)
+   cls(3)
 
-   camera(p.x-64, p.y-64)
+   camdx, camdy = getcamshake()
+   camera(p.x-64+camdx, p.y-64+camdy)
    draw_waves()
+   draw_cannonballs_splash()
+   draw_ai_boats()
    draw_boat(p)
    draw_cannonballs()
    draw_windtrails()
-
+   draw_debug_col()
+   
    camera()
-   print("wind: "..wind.dir.." "..wind.str)
-   print("p: "..p.speed.." "..p.dir.." "..p.v)
-   if count(cannonballs) > 0 then
-      local ball = cannonballs[1]
-      print("[ball] x: "..ball.x.." y: "..ball.y.." d: "..ball.dist.." state: "..ball.state)
-   end
+   -- print("wind: "..wind.dir.." "..wind.str)
+   -- print("p: "..p.speed.." "..p.dir.." "..p.v)
+   -- if count(cannonballs) > 0 then
+   --    local ball = cannonballs[1]
+   --    print("[ball] x: "..ball.x.." y: "..ball.y.." d: "..ball.dist.." state: "..ball.state)
+   -- end
 end
 
 -- inputs and controls
 function make_boat(x,y)
-   return {x=x, y=y, speed=0, v=0, dir=0, rx=0, ry=0}
+   local scale=1.5
+   return {x=x, y=y, speed=0, v=0, dir=0, rx=0, ry=0, w=8*scale, h=8*scale, scale=scale}
 end
 function update_inputs()
    if btn(0) then -- left
       p.dir += rot_speed
    elseif btn(1) then -- right
       p.dir -= rot_speed
-   elseif btnp(2) then -- up
+   end
+   if btnp(2) then -- up
       p.speed += 1
    elseif btnp(3) then -- down
       p.speed -= 1
    end
    if btnp(4) then -- square
-      make_cannonball(p, -1)
+      make_cannonball(p, 1)
    end
    if btnp(5) then -- X
-      make_cannonball(p, 1)
+      make_cannonball(p, -1)
    end
    p.dir = normalize_angle(p.dir)
    p.speed = min(max_speed, max(0, p.speed))
@@ -90,23 +114,81 @@ function update_boat(boat)
    -- apply only integer delta values and re-apply the rest the next frame
    local dx, dy = p.rx + cos(boat.dir) * boat.v, p.ry + sin(boat.dir) * boat.v
    local fdx, fdy = flr(dx), flr(dy)
-   p.rx, p.ry = dx - fdx, dy - fdy
-   boat.x += fdx
-   boat.y += fdy
+   local col = check_collisions(boat.x+fdx, boat.y+fdy, 0, 0, boat.w, boat.h, 0.75)
+   if col then
+      if not was_colliding and col_grace_period == 0 then
+         add_camshake(8,0,1,0,0.3)
+      end
+      was_colliding = true
+   else
+      p.rx, p.ry = dx - fdx, dy - fdy
+      boat.x += fdx
+      boat.y += fdy
+      if was_colliding then
+         was_colliding = false
+         col_grace_period += 15
+      end
+   end
+   col_grace_period = max(0, col_grace_period-1)
 end
 
 boat_sprite_map = {x=0, y=0}
 sail_sprites_map = {{x=2,y=0},{x=4,y=0},{x=6,y=0}}
 function draw_boat(boat)
-   draw_rotated_tile(boat.x, boat.y, -boat.dir, boat_sprite_map.x, boat_sprite_map.y, 1, false, 1.5)
+   draw_rotated_tile(boat.x, boat.y, -boat.dir, boat_sprite_map.x, boat_sprite_map.y, 1, false, boat.scale)
    local sail_sprite_map = sail_sprites_map[boat.speed+1]
-   draw_rotated_tile(boat.x, boat.y, -wind.dir, sail_sprite_map.x, sail_sprite_map.y, 1, false, 1.5)
+   draw_rotated_tile(boat.x, boat.y, -wind.dir, sail_sprite_map.x, sail_sprite_map.y, 1, false, boat.scale)
+end
+
+function draw_ai_boats()
+   for b in all(boats) do
+      pal(4,2,0)
+      draw_boat(b)
+      pal(0)
+   end
+end
+
+function check_collisions(x, y, dx, dy, w, h, s)
+   s = s or 1
+   for b in all(boats) do
+      hw,hh, bhw, bhh = s*w*0.5, s*h*0.5, s*b.w*0.5, s*b.h*0.5
+      local res = intersect(x-hw,y-hh,x+dx+hw,y+dy+hh, b.x-bhw,b.y-bhh,b.x+bhw,b.y+bhh)
+      if should_debug_col then
+         add(debug_coll, {x-hw,y-hh,x+dx+hw,y+dy+hh})
+         add(debug_coll, {b.x-bhw,b.y-bhh,b.x+bhw,b.y+bhh})
+      end
+      if res then
+         return b
+      end
+   end
+   return false
+end
+
+function add_camshake(freqx, freqy, ampx, ampy, duration)
+   camshake={dx=0, dy=0, t=0, freqx=freqx/30, freqy=freqy/30, ampx=ampx, ampy=ampy, lifetime=flr(duration*30)}
+end
+
+function getcamshake()
+   if (camshake == nil) return 0,0
+   return camshake.dx, camshake.dy
+end
+
+function update_camshake()
+   if (camshake == nil) return
+
+   if camshake.t >= camshake.lifetime then
+      camshake = nil
+      return
+   end
+   camshake.dx = -camshake.ampx * sin(camshake.t * camshake.freqx)
+   camshake.dy = -camshake.ampy * sin(camshake.t * camshake.freqy)
+   camshake.t += 1
 end
 
 -- states: [0: inair] [1: splash] [2: hit]
 function make_cannonball(boat, side)
    local dir = normalize_angle(boat.dir+side*0.25)
-   add(cannonballs, {x=boat.x, y=boat.y, dir=dir, v=1.0, dist=0, state=0, state_t=0})
+   add(cannonballs, {x=boat.x, y=boat.y, dir=dir, v=1.0, dist=0, state=0, state_t=0, r=2})
 end
 
 function update_cannonballs()
@@ -115,15 +197,22 @@ function update_cannonballs()
       local ball = cannonballs[i]
       if ball.state == 0 then -- inair
          local dx, dy = ball.v*cos(ball.dir), ball.v*sin(ball.dir)
-         -- todo: detect collision if z is withing detection threshold
-         ball.x += dx
-         ball.y += dy
-         ball.dist += sqrt(dx*dx + dy*dy)
-         if ball.dist > max_cannonball_dist then
-            ball.state = 1
+         local collision_res = check_collisions(ball.x, ball.y, dx, dy, ball.r, ball.r)
+         if collision_res and invlerp(ball.dist, 0, max_cannonball_dist) > 0.8 then
+            ball.x, ball.y = collision_res.x, collision_res.y
+            ball.state = 2 -- -> hit
+         else
+            ball.x += dx
+            ball.y += dy
+            ball.dist += sqrt(dx*dx + dy*dy)
+            if ball.dist > max_cannonball_dist then
+               ball.state = 1 -- -> splash
+            end
          end
-      elseif ball.state == 1 then -- splash
-         if ball.state_t < 30 then
+      elseif ball.state == 1 or ball.state == 2 then -- splash or hit
+         local durations = {splash_duration, expl_duration}
+         local duration = durations[ball.state]
+         if ball.state_t < duration then
             ball.state_t +=1
          else
             add(toremove, i)
@@ -139,13 +228,26 @@ function draw_cannonballs()
    for ball in all(cannonballs) do
       if ball.state == 0 then -- inair
          local middist = abs(ball.dist - max_cannonball_halfdist)
-         local r = lerp(2,5,invlerp(middist,max_cannonball_halfdist,0))
+         local r = lerp(ball.r,ball.r*2.5,invlerp(middist,max_cannonball_halfdist,0))
          circfill(ball.x, ball.y, r, 5)
-      elseif ball.state == 1 then -- splash
-         circfill(ball.x, ball.y, 2, 6) -- temp, to replace with sprite anim
+      elseif ball.state == 2 then -- hit
+         local expl_sprite_idx = flr(lerp(1, count(expl_frames)+0.5, invlerp(ball.state_t, 0, expl_duration)))
+         local expl_sprite = expl_frames[expl_sprite_idx]
+         scaled_spr(expl_sprite, ball.x, ball.y, 1, 1, 3)
       end
    end
 end
+
+function draw_cannonballs_splash()
+   for ball in all(cannonballs) do
+      if ball.state == 1 then -- splash
+         local splash_sprite_idx = flr(lerp(1, count(splash_frames)+0.5, invlerp(ball.state_t, 0, splash_duration)))
+         local splash_sprite = splash_frames[splash_sprite_idx]
+         scaled_spr(splash_sprite, ball.x, ball.y, 1, 1, 2)
+      end
+   end
+end
+
 
 -- water and wind effects
 
@@ -224,6 +326,16 @@ function draw_windtrails()
    end
 end
 
+function draw_debug_col()
+   if should_debug_col then
+      for c in all(debug_coll) do
+         rect(c[1], c[2], c[3], c[4], 8)
+      end
+      debug_coll={}
+   end
+end
+
+
 -- utils
 function normalize_angle(a)
    local extra = flr(abs(a))
@@ -256,6 +368,30 @@ function invlerp(val, a, b)
    return (val - a) / (b - a)
 end
 
+-- intersect rect a with rect b
+function intersect(a_minx,a_miny,a_maxx,a_maxy, b_minx,b_miny,b_maxx,b_maxy)
+   local xintersect = a_maxx > b_minx and a_minx < b_maxx
+   if (not xintersect) return false
+   local yintersect = a_maxy > b_miny and a_miny < b_maxy
+   return yintersect
+
+   -- if (not yintersect) return false
+   -- local col_x, col_y = 0,0
+   -- a_cx, a_cy = lerp(a_minx, a_maxx, 0.5), lerp(a_miny, a_maxy, 0.5)
+   -- b_cx, b_cy = lerp(b_minx, b_maxx, 0.5), lerp(b_miny, b_maxy, 0.5)
+   -- if a_cx < b_cx then
+   --    col_x = b_minx - (a_cx - a_minx)
+   -- else
+   --    col_x = b_maxx + (a_cx - a_minx)
+   -- end
+   -- if a_cy < b_cy then
+   --    col_y = b_miny - (a_cy - a_miny)
+   -- else
+   --    col_y = b_maxy + (a_cy - a_miny)
+   -- end
+   -- return {x= col_x, y= col_y}
+end
+
 -- @TheRoboZ https://www.lexaloffle.com/bbs/?pid=78451
 function draw_rotated_tile(x,y,rot,mx,my,w,flip,scale)
   --print("draw_rotated_tile("..x..","..y..","..rot..","..mx..","..my..","..w..","..(flip and "true" or "false")..","..scale..")")
@@ -274,15 +410,29 @@ function draw_rotated_tile(x,y,rot,mx,my,w,flip,scale)
   end
 end
 
+function scaled_spr(n, x, y, w, h, s)
+   w,h,s = w or 1, h or 1, s or 1
+   local x0,y0 = n*8*w, n*8*h
+   local sx,sy = x0 % 128, y0 \ 128 * 8
+   local sw,sh = 8*s*w, 8*s*h
+   sspr(sx, sy, w*8, h*8, x-sw*0.5, y-sh*0.5, sw, sh)
+end
+
 
 __gfx__
-000000000000000000000000000000000000000000000000000000000000000000000000000f0000000000000000000000000000000000000000000000000000
-0000000000000000000000000000000000770000000000000000000000000000000000000007f000000000000000000000000000000000000000000000000000
-00700700445454400000000000000000070070000077000000770000000000000007000000077000000000000000000000000000000000000000000000000000
-00077000444444440000000000000000000000000700700007007000000700000004700000047000000000000000000000000000000000000000000000000000
-00077000444444440000000000000000000007700000077000000000000700000004700000047000000000000000000000000000000000000000000000000000
-00700700445454400000000000000000000070070000700700000770000000000007000000077000000000000000000000000000000000000000000000000000
-0000000000000000000000000000000000000000000000000000700700000000000000000007f000000000000000000000000000000000000000000000000000
-000000000000000000000000000000000000000000000000000000000000000000000000000f0000000000000000000000000000000000000000000000000000
+000000000000000000000000000000000000000000000000000000000000000000000000000f0000000000000000000000000000000cc00000077000000cc000
+0000000000000000000000000000000000cc0000000000000000000000000000000000000007f0000000000000000000000cc00000c77c00007cc70000c33c00
+007007004454544000000000000000000c00c00000cc000000cc000000000000000700000007700000000000000cc00000c77c000c7cc7c007c33c700c3333c0
+00077000444444440000000000000000000000000c00c0000c00c000000700000004700000047000000cc00000c77c000c7cc7c0c7c33c7c7c3333c7c333333c
+0007700044444444000000000000000000000cc000000cc000000000000700000004700000047000000cc00000c77c000c7cc7c0c7c33c7c7c3333c7c333333c
+007007004454544000000000000000000000c00c0000c00c00000cc000000000000700000007700000000000000cc00000c77c000c7cc7c007c33c700c3333c0
+0000000000000000000000000000000000000000000000000000c00c00000000000000000007f0000000000000000000000cc00000c77c00007cc70000c33c00
+000000000000000000000000000000000000000000000000000000000000000000000000000f0000000000000000000000000000000cc00000077000000cc000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000077700000aaa000000a0000000900000004000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00070000007a700000a9a00000a9a000009890000048400000040000000000000000000000000000000000000000000000000000000000000000000000000000
+000000000077700000aaa000000a0000000900000004000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 __map__
 0103070008000900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
