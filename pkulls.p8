@@ -15,6 +15,7 @@ next_windrail=0
 was_colliding=false
 col_grace_period=0
 camshake=nil
+metervalue=0
 boarding_state=0
 boarding_state_t=0
 
@@ -71,12 +72,13 @@ function _draw()
    draw_waves()
    draw_cannonballs_splash()
    draw_ai_boats()
-   draw_boat(p)
+   draw_player_boat(p)
    draw_cannonballs()
    draw_windtrails()
    draw_debug_col()
 
    camera()
+   draw_hud()
    draw_boarding()
 
    -- print("wind: "..wind.dir.." "..wind.str)
@@ -108,7 +110,7 @@ function update_inputs()
    end
    if (btnp(4) and btn(5)) or (btn(4) and btnp(5)) then
       try_boarding()
-   else
+   elseif not was_colliding then -- no cannons while colliding, too close!
       if btnp(4) then -- square
          make_cannonball(p, 1)
       end
@@ -156,10 +158,44 @@ function draw_boat(boat)
    draw_rotated_tile(boat.x, boat.y, -wind.dir, sail_sprite_map.x, sail_sprite_map.y, 1, false, boat.scale)
 end
 
+function draw_player_boat()
+   draw_boat(p)
+end
+
+function draw_hud()
+   hpx,hpy = 2,2
+   w,h = 20,2
+   local hpcol = p.hp > 0.5 and 11 or 8
+   rectfill(hpx, hpy, hpx+w, hpy+h, 1)
+   rectfill(hpx, hpy, hpx+w*p.hp,hpy+h, hpcol)
+
+   meterx,metery = 2,4
+   local ismeter_full = metervalue >= 1
+   metercol = ismeter_full and 9 or 10
+   rectfill(meterx, metery, meterx+w, metery+h, 1)
+   if metervalue > 0 then
+      rectfill(meterx, metery, meterx+w*metervalue,metery+h, metercol)
+   end
+   if ismeter_full and was_colliding then
+      print("❎🅾️ to board", 40, 122)
+   end
+end
+
 function draw_ai_boats()
-   for b in all(boats) do
+   for boat in all(boats) do
       pal(4,2,0)
-      draw_boat(b)
+      draw_boat(boat)
+      
+      if boat.hp < 1 then
+         local offsetx, offsety = 4*boat.scale, 3*boat.scale
+         local barx, bary = boat.x - offsetx, boat.y + offsety
+         local w,h = 8*boat.scale, 1*boat.scale
+         rectfill(barx, bary, barx + w, bary + h, 1)
+         if boat.hp > 0 then
+            local hpcol = boat.hp > 0.5 and 11 or 8
+            rectfill(barx, bary, barx + w*boat.hp, bary + h, hpcol)
+         end
+      end
       pal(0)
    end
 end
@@ -201,20 +237,24 @@ function update_camshake()
    camshake.t += 1
 end
 
-function apply_dammage(boat, dmg)
+function apply_dammage(boat, dmg, instigator)
    boat.hp = max(0, boat.hp-dmg)
    if boat.hp == 0 then
       boat.state = 1 -- sink boat
    end
+   if instigator == p then
+      metervalue = min(1, metervalue+0.1)
+   end
 end
 
 function try_boarding()
-   printh("was col? "..tostr(was_colliding).." targethp: "..was_colliding.hp)
+   if (metervalue < 1) return
    if (not was_colliding) return
    local target = was_colliding -- last collision is the target
    if (target.hp > 0.5) return
    --apply_dammage(target, 0.5) -- do after loot?
    set_boarding_state(1) -- tethering
+   metervalue = 0
 end
 function set_boarding_state(state)
    boarding_state=state
@@ -256,7 +296,7 @@ end
 -- states: [0: inair] [1: splash] [2: hit]
 function make_cannonball(boat, side)
    local dir = normalize_angle(boat.dir+side*0.25)
-   add(cannonballs, {x=boat.x, y=boat.y, dir=dir, v=1.0, dist=0, state=0, state_t=0, r=2})
+   add(cannonballs, {x=boat.x, y=boat.y, dir=dir, v=1.0, dist=0, state=0, state_t=0, r=2, instigator=boat})
 end
 
 function update_cannonballs()
@@ -269,7 +309,7 @@ function update_cannonballs()
          if collision_res and invlerp(ball.dist, 0, max_cannonball_dist) > 0.8 then
             ball.x, ball.y = collision_res.x, collision_res.y
             ball.state = 2 -- -> hit
-            apply_dammage(collision_res, 0.2)
+            apply_dammage(collision_res, 0.2, ball.instigator)
          else
             ball.x += dx
             ball.y += dy
