@@ -6,7 +6,7 @@ __lua__
 dt=1/30
 g=-9.8/30 -- gravity for 1 frame
 p={}
-boats={}
+aiboats={}
 wind={}
 waves={}
 windtrails={}
@@ -30,6 +30,7 @@ max_cannonball_halfdist=max_cannonball_dist * 0.5
 max_wind=5
 c2c_meter_inc=0.002
 c2c_dmg_inc=0.001
+ai_ddir = 0.01
 wave_sprites={4,5,6,5}
 wave_sprites_count=count(wave_sprites)
 splash_duration=45
@@ -43,12 +44,12 @@ loot_frames={128,130,132,134}
 
 function _init()
    p=make_boat(64, 64)
-   wind={dir=rnd(1), str=2+rnd(max_wind-2)}
+   wind={dir=0, str=0, time_to_next=0}
    for i=1,30 do
       add(waves, make_wave(64,64))
    end
    for i=1,20 do
-      add(boats, make_boat(rnd(256)-128, rnd(256)-128))
+      add(aiboats, make_ai_boat(rnd(256)-128, rnd(256)-128))
    end
 
    pal(2, 132, 1) -- swap purple for dark brown
@@ -63,6 +64,7 @@ function _update()
       update_wind()
       update_inputs()
       update_boat(p)
+      foreach(aiboats, update_ai_boat)
       update_cannonballs()
       update_waves()
       update_windtrails()
@@ -103,6 +105,19 @@ function make_boat(x,y)
    local scale=1.5
    return {x=x, y=y, speed=0, v=0, dir=0, rx=0, ry=0, w=8*scale, h=8*scale, scale=scale, state=0, hp=1}
 end
+
+global_aiID=0
+function make_ai_boat(x,y)
+   local boat = make_boat(x,y)
+   boat.aistate = 0 -- 0: wander 1: combat, 2: flee
+   boat.aistate_t = 0
+   boat.wander_time = 0
+   boat.dir = rnd(1)
+   boat.desired_dir = boat.dir
+   boat.aiID = global_aiID
+   global_aiID += 1
+   return boat
+end
 function update_inputs()
    if btn(0) then -- left
       p.dir += rot_speed
@@ -124,8 +139,22 @@ function update_inputs()
          make_cannonball(p, -1)
       end
    end
-   p.dir = normalize_angle(p.dir)
+   p.dir = normalize_angle01(p.dir)
    p.speed = min(max_speed, max(0, p.speed))
+end
+
+function on_collide(boat1, boat2)
+  if (boat1.aistate ~= nil) return
+  
+  if not was_colliding and col_grace_period == 0 then
+     add_camshake(8,0,1,0,0.3)
+  end
+  if boat1 == p then
+     metervalue = min(1, metervalue + c2c_meter_inc)
+     apply_damage(boat1, c2c_dmg_inc, boat2)
+     apply_damage(boat2, c2c_dmg_inc, boat1)
+  end
+  was_colliding = boat2
 end
 
 function update_boat(boat)
@@ -136,24 +165,17 @@ function update_boat(boat)
    local boat_max_speed = 1.5 * wind.str * boat.speed * speed_mult
    boat.v = boat_min_speed + (boat_max_speed - boat_min_speed) * -1 * sin(delta_angle)
    -- apply only integer delta values and re-apply the rest the next frame
-   local dx, dy = p.rx + cos(boat.dir) * boat.v, p.ry + sin(boat.dir) * boat.v
+   local dx, dy = boat.rx + cos(boat.dir) * boat.v, boat.ry + sin(boat.dir) * boat.v
    local fdx, fdy = flr(dx), flr(dy)
-   local col = check_collisions(boat.x+fdx, boat.y+fdy, 0, 0, boat.w, boat.h, 0.75)
+   local col = check_collisions(boat, boat.x+fdx, boat.y+fdy, 0, 0, boat.w, boat.h, 0.75)
    if col then
-      if not was_colliding and col_grace_period == 0 then
-         add_camshake(8,0,1,0,0.3)
-      end
-      if boat == p then
-         metervalue = min(1, metervalue + c2c_meter_inc)
-         apply_damage(p, c2c_dmg_inc, col)
-         apply_damage(col, c2c_dmg_inc, p)
-      end
-      was_colliding = col
+      on_collide(boat, col)
    else
-      p.rx, p.ry = dx - fdx, dy - fdy
+      boat.rx, boat.ry = dx - fdx, dy - fdy
       boat.x += fdx
       boat.y += fdy
-      if was_colliding then
+
+      if boat.aistate == nil and was_colliding then
          was_colliding = false
          col_grace_period += 15
       end
@@ -161,12 +183,83 @@ function update_boat(boat)
    col_grace_period = max(0, col_grace_period-1)
 end
 
+function set_ai_state(boat, state)
+   local prevstate = boat.aistate
+   boat.aistate = state
+   boat.aistate_t = 0
+   --printh("ai boat "..boat.aiID.." from "..prevstate.." to "..boat.aistate)
+end
+
+function should_flee(boat)
+   return boat.hp < 0.2
+end
+
+function update_ai_boat(boat)
+   --printh("ai "..boat.aiID.." state: "..boat.state.." aistate: "..boat.aistate)
+   if (boat.state == 1) return -- sunk
+   if (should_flee(boat) and boat.aistate ~= 2) set_ai_state(boat, 2) -- start fleeing
+
+   if boat.aistate == 0 then        -- wander
+      if boat.aistate_t >= boat.wander_time then
+         boat.aistate_t = 0
+         boat.wander_time = 30*7+rnd(30*5)
+         boat.desired_dir = rnd(1)
+         boat.speed = flr(rnd(1.99))
+      end
+   elseif boat.aistate == 1 then    -- combat
+      local dx, dy = boat.x - p.x, boat.y - p.y
+      local dist = sqrt(dx*dx + dy*dy)
+      local targetDistOffset = dist - 40
+      if abs(targetDistOffset) < 7 then
+         boat.speed = 0
+         local angleToTarget = normalize_angle01(atan2(dx,dy))
+         local dangle = shortest_angle_between_normalized(boat.dir, angleToTarget)
+         local test_val = normalize_angle01(boat.dir + dangle)
+         local dir = 1
+         if (test_val - boat.desired_dir > 0.01) dir = -1
+         boat.desired_dir = normalize_angle01(angleToTarget + dir * 0.25)
+         if abs(boat.dir-boat.desired_dir) < 0.05 then
+            if (boat.aistate_t % 30 == 0) then
+               if dir > 0 then
+                  make_cannonball(boat, 1)
+               else
+                  make_cannonball(boat, -1)
+               end
+            end
+         end
+      else
+         boat.speed = 1
+         local offsetdir = 0
+         if (targetDistOffset > 0) offsetdir = 0.5 -- 180 deg
+         boat.desired_dir = normalize_angle01(atan2(dx,dy) + offsetdir)
+      end
+      printh("ai "..boat.aiID.." targetDistOffset: "..targetDistOffset.." desired_dir: "..boat.desired_dir)
+   elseif boat.aistate == 2 then    -- flee
+      local dx, dy = boat.x - p.x, boat.y - p.y
+      boat.desired_dir = normalize_angle01(atan2(dx,dy))
+      boat.speed = 1
+   end
+   boat.aistate_t += 1
+   local dangle = shortest_angle_between_normalized(boat.dir, boat.desired_dir)
+   if abs(dangle) < ai_ddir then
+      boat.dir = boat.desired_dir
+   else
+      local test_val = normalize_angle01(boat.dir + dangle)
+      local dir = 1
+      if (test_val - boat.desired_dir > 0.01) dir = -1
+      boat.dir = normalize_angle01(boat.dir + dir * ai_ddir)
+   end
+   update_boat(boat)
+end
+
 boat_sprite_map = {x=0, y=0}
 sail_sprites_map = {{x=2,y=0},{x=4,y=0},{x=6,y=0}}
 function draw_boat(boat)
    if boat.state == 0 then -- state ok
       draw_rotated_tile(boat.x, boat.y, -boat.dir, boat_sprite_map.x, boat_sprite_map.y, 1, false, boat.scale)
-      local sail_sprite_map = sail_sprites_map[boat.speed+1]
+      local sail_sprite_index = boat.speed+1
+      if (boat.aistate ~= nil) sail_sprite_index += 1 -- ai don't use speed 2
+      local sail_sprite_map = sail_sprites_map[sail_sprite_index]
       draw_rotated_tile(boat.x, boat.y, -wind.dir, sail_sprite_map.x, sail_sprite_map.y, 1, false, boat.scale)
    elseif boat.state == 1 then -- state sunk
       scaled_spr(2, boat.x, boat.y, boat.scale)
@@ -204,7 +297,7 @@ function draw_hud()
 end
 
 function draw_ai_boats()
-   for boat in all(boats) do
+   for boat in all(aiboats) do
       pal(4,2,0)
       draw_boat(boat)
       
@@ -217,22 +310,25 @@ function draw_ai_boats()
             local hpcol = boat.hp > 0.5 and 11 or 8
             rectfill(barx, bary, barx + w*boat.hp, bary + h, hpcol)
          end
+         print("["..boat.aiID.."] "..boat.aistate, barx, bary+5)
       end
       pal(0)
    end
 end
 
-function check_collisions(x, y, dx, dy, w, h, s)
+function check_collisions(actor, x, y, dx, dy, w, h, s)
    s = s or 1
-   for b in all(boats) do
-      hw,hh, bhw, bhh = s*w*0.5, s*h*0.5, s*b.w*0.5, s*b.h*0.5
-      local res = intersect(x-hw,y-hh,x+dx+hw,y+dy+hh, b.x-bhw,b.y-bhh,b.x+bhw,b.y+bhh)
-      if should_debug_col then
-         add(debug_coll, {x-hw,y-hh,x+dx+hw,y+dy+hh})
-         add(debug_coll, {b.x-bhw,b.y-bhh,b.x+bhw,b.y+bhh})
-      end
-      if res and b.state != 1 then -- boat not sunk
-         return b
+   for b in all(aiboats) do
+      if actor ~= b then
+        hw,hh, bhw, bhh = s*w*0.5, s*h*0.5, s*b.w*0.5, s*b.h*0.5
+        local res = intersect(x-hw,y-hh,x+dx+hw,y+dy+hh, b.x-bhw,b.y-bhh,b.x+bhw,b.y+bhh)
+        if should_debug_col then
+           add(debug_coll, {x-hw,y-hh,x+dx+hw,y+dy+hh})
+           add(debug_coll, {b.x-bhw,b.y-bhh,b.x+bhw,b.y+bhh})
+        end
+        if res and b.state ~= 1 then -- boat not sunk
+           return b
+        end
       end
    end
    return false
@@ -263,6 +359,10 @@ function apply_damage(boat, dmg, instigator)
    boat.hp = max(0, boat.hp-dmg)
    if boat.hp == 0 then
       boat.state = 1 -- sink boat
+   elseif boat.aistate ~= nil then
+      if boat.aistate ~= 1 and not should_flee(boat) then
+         set_ai_state(boat, 1) -- go into combat
+      end
    end
 end
 
@@ -326,7 +426,7 @@ end
 
 -- states: [0: inair] [1: splash] [2: hit]
 function make_cannonball(boat, side)
-   local dir = normalize_angle(boat.dir+side*0.25)
+   local dir = normalize_angle01(boat.dir+side*0.25)
    add(cannonballs, {x=boat.x, y=boat.y, dir=dir, v=1.0, dist=0, state=0, state_t=0, r=2, instigator=boat})
 end
 
@@ -336,7 +436,7 @@ function update_cannonballs()
       local ball = cannonballs[i]
       if ball.state == 0 then -- inair
          local dx, dy = ball.v*cos(ball.dir), ball.v*sin(ball.dir)
-         local collision_res = check_collisions(ball.x, ball.y, dx, dy, ball.r, ball.r)
+         local collision_res = check_collisions(ball, ball.x, ball.y, dx, dy, ball.r, ball.r)
          if collision_res and invlerp(ball.dist, 0, max_cannonball_dist) > 0.8 then
             ball.x, ball.y = collision_res.x, collision_res.y
             ball.state = 2 -- -> hit
@@ -424,10 +524,16 @@ function draw_waves()
 end
 
 function update_wind()
-   -- wind.dir = wind.dir + 0.001
-   -- if wind.dir > 1 then
-   --    wind.dir = 0
-   -- end
+   if wind.time_to_next <= 0 then
+      --wind.dir = rnd(1)
+      local delta_dir = 1
+      if (rnd(1) > 0.5) delta_dir = -1
+      wind.dir = normalize_angle01(wind.dir + delta_dir * rnd(0.15))
+      wind.str=2+rnd(max_wind-2)
+      wind.time_to_next = 30*5 + rnd(30*10)
+   else
+      wind.time_to_next -= 1
+   end
 end
 
 function make_windtrail()
@@ -480,7 +586,7 @@ end
 
 
 -- utils
-function normalize_angle(a)
+function normalize_angle01(a)
    local extra = flr(abs(a))
    if a > 1 then
       a -= extra
@@ -562,6 +668,10 @@ function scaled_spr(n, x, y, w, h, s)
    sspr(sx, sy, w*8, h*8, x-sw*0.5, y-sh*0.5, sw, sh)
 end
 
+function sign(x)
+   if x < 0 then return -1
+   else return 1 end
+end
 
 __gfx__
 000000000000000000000470000000000000000000000000000000000000000000000000000f0000000000000000000000000000000cc00000077000000cc000
@@ -629,18 +739,18 @@ e333e44448888ff44444442244224444e333e444444888888444444ddd4224444444444e88888844
 33333e444ff444fff44444422244222433333e444ff4444ff44444422444224444ee444ff44ffee444444444ee4444444444444ff00fff444444444444444444
 33333e444ff4444ff44444442244422433333e444fff4444fff44442224422244e4444fff4ffe4444444444e44444444444444fff0fff4444444444444444444
 4444444444444444444444444444444444444a44644444dd44744448884444740000000000000000000000000000000000000000000000000000000000000000
-ccccccccccccccccccccccccccccccccaccccaccc664444d44448888888847440000000000000000000000000000000000000000000000000000000000000000
+eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeaeeeeaeee664444d44448888888847440000000000000000000000000000000000000000000000000000000000000000
 44444444ddd444444444dddddddd4444aaa444aaaaa6444474488888888884480000000000000000000000000000000000000000000000000000000000000000
 44444ddd44ddd444444dd444444ddd4444aa44aaaaaa644444888888888888880000000000000000000000000000000000000000000000000000000000000000
-cccccdddd444ddccccc6666644444ddcccc4aaaaaaaaa64448888888888888840000000000000000000000000000000000000000000000000000000000000000
+eeeeedddd444ddeeeee6666644444ddeeee4aaaaaaaaa64448888888888888840000000000000000000000000000000000000000000000000000000000000000
 444ddd44ddd444d4444aaaa6666664d4444aaaaaaaaaa64448888888888888870000000000000000000000000000000000000000000000000000000000000000
 44dd444444dd44d44aaaaaaaaaaa64d4aaaaaaaaaaaaa6444ffffffffffffff40000000000000000000000000000000000000000000000000000000000000000
 44d44444444d4dd44aaaaaaaaaaaa6d44aaaaaaaaaaaa64d4ff777ff777ffff40000000000000000000000000000000000000000000000000000000000000000
-ccddddddddddd4dccc666666666664dccc666666666664dc4ff7c7ff7c7ffff40000000000000000000000000000000000000000000000000000000000000000
+eeddddddddddd4deee666666666664deee666666666664de4ff7c7ff7c7ffff40000000000000000000000000000000000000000000000000000000000000000
 44d44444444d44d444d44444444d44d444d44444444d44d44ff777ff777ffff40000000000000000000000000000000000000000000000000000000000000000
 44d444dd444d44d444d444dd444d44d444d444dd444d44d44ffffffffffffff40000000000000000000000000000000000000000000000000000000000000000
 44d44444444d44d444d44444444d44d444d44444444d44d44ffff7877fffff440000000000000000000000000000000000000000000000000000000000000000
-ccd44444444d44dcccd44444444d44dcccd44444444d44dc44fff8888fffff440000000000000000000000000000000000000000000000000000000000000000
+eed44444444d44deeed44444444d44deeed44444444d44de44fff8888fffff440000000000000000000000000000000000000000000000000000000000000000
 44d44444444d44d444d44444444d44d444d44444444d44d4444ff8888ffff4440000000000000000000000000000000000000000000000000000000000000000
 44ddddddddddddd444ddddddddddddd444ddddddddddddd4444447778ffff4440000000000000000000000000000000000000000000000000000000000000000
 444444444444444444444444444444444444444444444444444444fffffff4440000000000000000000000000000000000000000000000000000000000000000
