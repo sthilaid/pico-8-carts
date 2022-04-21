@@ -18,6 +18,7 @@ camshake=nil
 metervalue=0
 boarding_state=0
 boarding_state_t=0
+p_cannon_timer=0
 
 should_debug_col = false
 debug_coll={}
@@ -49,7 +50,7 @@ function _init()
       add(waves, make_wave(64,64))
    end
    for i=1,20 do
-      add(aiboats, make_ai_boat(rnd(256)-128, rnd(256)-128))
+      add(aiboats, make_ai_boat(rnd(512)-256, rnd(512)-256))
    end
 
    pal(2, 132, 1) -- swap purple for dark brown
@@ -129,14 +130,18 @@ function update_inputs()
    elseif btnp(3) then -- down
       p.speed -= 1
    end
+
+   p_cannon_timer = max(0, p_cannon_timer-1)
    if (btnp(4) and btn(5)) or (btn(4) and btnp(5)) then
       try_boarding()
-   elseif not was_colliding then -- no cannons while colliding, too close!
+   elseif not was_colliding and p_cannon_timer == 0 then -- no cannons while colliding, too close!
       if btnp(4) then -- square
          make_cannonball(p, 1)
+         p_cannon_timer = 30
       end
       if btnp(5) then -- X
          make_cannonball(p, -1)
+         p_cannon_timer = 30
       end
    end
    p.dir = normalize_angle01(p.dir)
@@ -227,13 +232,17 @@ function update_ai_boat(boat)
                end
             end
          end
-      else
-         boat.speed = 1
-         local offsetdir = 0
-         if (targetDistOffset > 0) offsetdir = 0.5 -- 180 deg
-         boat.desired_dir = normalize_angle01(atan2(dx,dy) + offsetdir)
+      else -- if too far need to close distance
+         if was_colliding == boat then
+            boat.speed = 0
+         else
+            boat.speed = 1
+            local offsetdir = 0
+            if (targetDistOffset > 0) offsetdir = 0.5 -- 180 deg
+            boat.desired_dir = normalize_angle01(atan2(dx,dy) + offsetdir)
+         end
       end
-      printh("ai "..boat.aiID.." targetDistOffset: "..targetDistOffset.." desired_dir: "..boat.desired_dir)
+      --printh("ai "..boat.aiID.." targetDistOffset: "..targetDistOffset.." desired_dir: "..boat.desired_dir)
    elseif boat.aistate == 2 then    -- flee
       local dx, dy = boat.x - p.x, boat.y - p.y
       boat.desired_dir = normalize_angle01(atan2(dx,dy))
@@ -278,19 +287,40 @@ function draw_player_boat()
 end
 
 function draw_hud()
-   hpx,hpy = 2,2
-   w,h = 20,2
+   -- notoriety hud
+   local x,y = 1,2
+   rectfill(0,1,9,9,1)
+   rect(0,1,9,10,6)
+   palt(0,false)
+   palt(14,true)
+   spr(49,x,y)
+   palt()
+
+   -- hull hud
+   local hpx,hpy = 11,3
+   local w,h = 20,2
    local hpcol = p.hp > 0.5 and 11 or 8
    rectfill(hpx, hpy, hpx+w, hpy+h, 1)
    rectfill(hpx, hpy, hpx+w*p.hp,hpy+h, hpcol)
 
-   meterx,metery = 2,4
+   -- boarding meter hud
+   local meterx,metery = 11,7
    local ismeter_full = metervalue >= 1
    metercol = ismeter_full and 9 or 10
    rectfill(meterx, metery, meterx+w, metery+h, 1)
    if metervalue > 0 then
       rectfill(meterx, metery, meterx+w*metervalue,metery+h, metercol)
    end
+
+   -- wind hud
+   local x,y,r = 116,116,10
+   circfill(x,y,r,1)
+   circ(x,y,r,6)
+   spr(32,x-7,y-4)
+   spr(33,x+1,y-4)
+   line(x,y,x+r*cos(wind.dir),y+r*sin(wind.dir), 8)
+
+   -- meter full prompt
    if ismeter_full and was_colliding then
       print("❎🅾️ to board", 40, 122)
    end
@@ -316,22 +346,36 @@ function draw_ai_boats()
    end
 end
 
-function check_collisions(actor, x, y, dx, dy, w, h, s)
-   s = s or 1
-   for b in all(aiboats) do
-      if actor ~= b then
-        hw,hh, bhw, bhh = s*w*0.5, s*h*0.5, s*b.w*0.5, s*b.h*0.5
-        local res = intersect(x-hw,y-hh,x+dx+hw,y+dy+hh, b.x-bhw,b.y-bhh,b.x+bhw,b.y+bhh)
-        if should_debug_col then
-           add(debug_coll, {x-hw,y-hh,x+dx+hw,y+dy+hh})
-           add(debug_coll, {b.x-bhw,b.y-bhh,b.x+bhw,b.y+bhh})
-        end
-        if res and b.state ~= 1 then -- boat not sunk
-           return b
-        end
-      end
+-- check if actor with pos x,y, displacement dx,dy and width/height w,h collides
+-- with given boat
+function check_collision_for_boat(actor, x, y, dx, dy, w, h, s, boat)
+   local hw,hh, bhw, bhh = s*w*0.5, s*h*0.5, s*boat.w*0.5, s*boat.h*0.5
+   local res = intersect(x-hw,y-hh,x+dx+hw,y+dy+hh, boat.x-bhw,boat.y-bhh,boat.x+bhw,boat.y+bhh)
+   if should_debug_col then
+      local color = res and 8 or 10
+      add(debug_coll, {x-hw,y-hh,x+dx+hw,y+dy+hh, color})
+      add(debug_coll, {boat.x-bhw,boat.y-bhh,boat.x+bhw,boat.y+bhh, color})
+   end
+   if res and boat.state ~= 1 then -- boat not sunk
+      return boat
    end
    return false
+end
+
+
+function check_collisions(actor, x, y, dx, dy, w, h, s)
+   s = s or 1 -- scale
+   for b in all(aiboats) do
+      if b ~= actor then
+         local col = check_collision_for_boat(actor, x, y, dx, dy, w, h, s, b)
+         if (col) return col
+      end
+   end
+   if actor ~= p and check_collision_for_boat(actor, x, y, dx, dy, w, h, s, p) then
+      return p
+   else
+      return false
+   end
 end
 
 function add_camshake(freqx, freqy, ampx, ampy, duration)
@@ -389,7 +433,10 @@ function update_boarding()
    elseif boarding_state == 2 then
       if (boarding_state_t == 120) set_boarding_state(3) -- to loot
    elseif boarding_state == 3 then
-      if (boarding_state_t == 120) set_boarding_state(0) -- to no boarding
+      if boarding_state_t == 120 then
+         p.hp = min(1, p.hp + 0.4)
+         set_boarding_state(0) -- to no boarding
+      end
    end
    boarding_state_t += 1
 end
@@ -578,7 +625,7 @@ end
 function draw_debug_col()
    if should_debug_col then
       for c in all(debug_coll) do
-         rect(c[1], c[2], c[3], c[4], 8)
+         rect(c[1], c[2], c[3], c[4], c[5])
       end
       debug_coll={}
    end
@@ -693,19 +740,19 @@ __gfx__
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+60606060666066600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+66666060606060600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+06060060606066600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00040000e000000e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000e004000e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000e444444e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000e404404e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000e444444e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000e448844e0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000ee4444ee0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000eee44eee0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 33333333355333333333333333333333333333333333355333333333333333334e44444e44444444444e44444444444e4e44444e444444444444444444444444
 33333333335555333333333333333333333333333333335533333333333333334e44444e4444544444e4444444444ee44e44444e444454444444444444444444
 3333333333333555333cc33333333333333333333333333553333333333333334e44444e44454444ee444444444ee4444e44444e444544444444444444444444
