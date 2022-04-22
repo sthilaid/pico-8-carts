@@ -60,9 +60,25 @@ function _init()
    pal(2, 132, 1) -- swap purple for dark brown
    pal(3, 140, 1) -- swap dark green for dark blue
    pal(14, 128, 1) -- swap pink for very dark brown
+
+   update_fn=game_update
+   draw_fn=game_draw
 end
 
 function _update()
+   update_fn()
+end
+
+function _draw()
+   draw_fn()
+end
+
+function game_update()
+   if p.state == 1 then  -- if player dead, stop everything
+      if (btn(4) and btn(5)) run()
+      return
+   end
+   
    update_boarding()
    
    if boarding_state == 0 then
@@ -77,7 +93,7 @@ function _update()
    end
 end
 
-function _draw()
+function game_draw()
    cls(3)
 
    camdx, camdy = getcamshake()
@@ -347,6 +363,19 @@ function draw_hud()
    -- meter full prompt
    if ismeter_full and was_colliding then
       print("❎🅾️ to board", 40, 122)
+   end
+
+   -- death hud
+   if p.state == 1 then
+      local str = "You are dead, "..infamy_titles[infamy_index]
+      local str_w = #(str)*4
+      local w,h = str_w+2, (str_w+2)*0.5
+      local x,y = 64-w*0.5,64-h*0.5
+      rectfill(x,y,x+w,y+h, 0)
+      color(6)
+      print(str, 64-str_w*0.5, 59)
+      local restart_str = "❎🅾️ to restart"
+      print(restart_str, 34, 69)
    end
 end
 
