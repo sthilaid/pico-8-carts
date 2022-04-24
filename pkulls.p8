@@ -2,11 +2,12 @@ pico-8 cartridge // http://www.pico-8.com
 version 35
 __lua__
 
--- main
+-- global variables
 dt=1/30
 g=-9.8/30 -- gravity for 1 frame
 p={}
 aiboats={}
+krakens={}
 wind={}
 waves={}
 windtrails={}
@@ -21,9 +22,11 @@ boarding_state_t=0
 p_cannon_timer=0
 infamy=0
 
+-- debug variables
 should_debug_col = false
 debug_coll={}
 
+-- global constants
 speed_mult=0.1
 max_speed=2
 rot_speed=0.01
@@ -33,6 +36,9 @@ max_wind=5
 c2c_meter_inc=0.002
 c2c_dmg_inc=0.001
 ai_ddir = 0.01
+boat_sprite_map = {x=0, y=0}
+big_boat_sprite_map = {x=8, y=0}
+sail_sprites_map = {{x=2,y=0},{x=4,y=0},{x=6,y=0}}
 wave_sprites={4,5,6,5}
 wave_sprites_count=count(wave_sprites)
 splash_duration=45
@@ -46,6 +52,8 @@ loot_frames={128,130,132,134}
 infamy_portraits={49,50,51,52}
 infamy_titles={"swabbie","first mate","captain","pirate lord"}
 infamy_colors={6,10,9,8}
+kraken_frames={34,35}
+kraken_attack_frames={36,37,38,39,40,41,42,43,44}
 
 function _init()
    p=make_boat(64, 64)
@@ -55,6 +63,9 @@ function _init()
    end
    for i=1,20 do
       add(aiboats, make_ai_boat(rnd(512)-256, rnd(512)-256))
+   end
+   for i=1,10 do
+      add(krakens, make_kraken(rnd(512)-256, rnd(512)-256))
    end
 
    pal(2, 132, 1) -- swap purple for dark brown
@@ -73,6 +84,9 @@ function _draw()
    draw_fn()
 end
 
+-------------------------------------------------------------------------------
+-- game draw and update
+
 function game_update()
    if p.state == 1 then  -- if player dead, stop everything
       if (btn(4) and btn(5)) run()
@@ -86,6 +100,7 @@ function game_update()
       update_inputs()
       update_boat(p)
       foreach(aiboats, update_ai_boat)
+      update_krakens()
       update_cannonballs()
       update_waves()
       update_windtrails()
@@ -99,6 +114,7 @@ function game_draw()
    camdx, camdy = getcamshake()
    camera(p.x-64+camdx, p.y-64+camdy)
    draw_waves()
+   draw_krakens()
    draw_cannonballs_splash()
    draw_ai_boats()
    draw_player_boat(p)
@@ -119,9 +135,10 @@ function game_draw()
    -- end
 end
 
--- inputs and controls
+-------------------------------------------------------------------------------
+-- Boats
 
--- state 0: ok 1: sinked
+-- state 0: ok, 1: sinked, 2: kraken-attack
 function make_boat(x,y)
    local scale=1.5
    return {x=x, y=y, speed=0, v=0, dir=0, rx=0, ry=0, w=8*scale, h=8*scale, scale=scale, state=0, hp=1}
@@ -183,6 +200,8 @@ function on_collide(boat1, boat2)
 end
 
 function update_boat(boat)
+   if (boat.state == 1 or boat.state == 2) return -- sinked or kraken attack
+   
    local delta_angle = shortest_angle_between_normalized(boat.dir, wind.dir)
    -- boat movement vs wind inspired from:
    -- https://sailing-blog.nauticed.org/sailboat-speed-versus-sailing-angle/
@@ -208,6 +227,25 @@ function update_boat(boat)
    col_grace_period = max(0, col_grace_period-1)
 end
 
+
+function draw_boat(boat)
+   if boat.state == 0 then -- state ok
+      if boat == p and infamy >= 2 then
+         draw_rotated_tile(boat.x, boat.y, -boat.dir, big_boat_sprite_map.x, big_boat_sprite_map.y, 2, false, 1.3)
+      else
+         draw_rotated_tile(boat.x, boat.y, -boat.dir, boat_sprite_map.x, boat_sprite_map.y, 1, false, boat.scale)
+      end
+      local sail_sprite_index = boat.speed+1
+      if (boat.aistate ~= nil) sail_sprite_index += 1 -- ai don't use speed 2
+      local sail_sprite_map = sail_sprites_map[sail_sprite_index]
+      draw_rotated_tile(boat.x, boat.y, -wind.dir, sail_sprite_map.x, sail_sprite_map.y, 1, false, boat.scale)
+   elseif boat.state == 1 then -- state sunk
+      scaled_spr(2, boat.x, boat.y, boat.scale)
+   elseif boat.state == 2 then -- state kraken attack
+      scaled_spr(2, boat.x, boat.y, boat.scale)
+   end
+end
+
 function set_ai_state(boat, state)
    local prevstate = boat.aistate
    boat.aistate = state
@@ -221,7 +259,7 @@ end
 
 function update_ai_boat(boat)
    --printh("ai "..boat.aiID.." state: "..boat.state.." aistate: "..boat.aistate)
-   if (boat.state == 1) return -- sunk
+   if (boat.state == 1 or boat.state == 2) return -- sunk or kraken atack
    if (should_flee(boat) and boat.aistate ~= 2) set_ai_state(boat, 2) -- start fleeing
 
    if boat.aistate == 0 then        -- wander
@@ -281,17 +319,23 @@ function update_ai_boat(boat)
    update_boat(boat)
 end
 
-boat_sprite_map = {x=0, y=0}
-sail_sprites_map = {{x=2,y=0},{x=4,y=0},{x=6,y=0}}
-function draw_boat(boat)
-   if boat.state == 0 then -- state ok
-      draw_rotated_tile(boat.x, boat.y, -boat.dir, boat_sprite_map.x, boat_sprite_map.y, 1, false, boat.scale)
-      local sail_sprite_index = boat.speed+1
-      if (boat.aistate ~= nil) sail_sprite_index += 1 -- ai don't use speed 2
-      local sail_sprite_map = sail_sprites_map[sail_sprite_index]
-      draw_rotated_tile(boat.x, boat.y, -wind.dir, sail_sprite_map.x, sail_sprite_map.y, 1, false, boat.scale)
-   elseif boat.state == 1 then -- state sunk
-      scaled_spr(2, boat.x, boat.y, boat.scale)
+function draw_ai_boats()
+   for boat in all(aiboats) do
+      pal(4,2,0)
+      draw_boat(boat)
+      
+      if boat.state == 0 and boat.hp < 1 then
+         local offsetx, offsety = 4*boat.scale, 3*boat.scale
+         local barx, bary = boat.x - offsetx, boat.y + offsety
+         local w,h = 8*boat.scale, 1*boat.scale
+         rectfill(barx, bary, barx + w, bary + h, 1)
+         if boat.hp > 0 then
+            local hpcol = boat.hp > 0.5 and 11 or 8
+            rectfill(barx, bary, barx + w*boat.hp, bary + h, hpcol)
+         end
+         --print("["..boat.aiID.."] "..boat.aistate, barx, bary+5)
+      end
+      pal(0)
    end
 end
 
@@ -305,6 +349,9 @@ function draw_player_boat()
       c2c_frame = (c2c_frame+1) % count(c2c_frames) + 1
    end
 end
+
+-------------------------------------------------------------------------------
+-- HUD
 
 function draw_hud()
    -- infamy hud
@@ -360,6 +407,9 @@ function draw_hud()
       end
    end
 
+   -- timer
+   --print(flr(time()*10)/10, 100, 2)
+
    -- meter full prompt
    if ismeter_full and was_colliding then
       print("❎🅾️ to board", 40, 122)
@@ -379,29 +429,12 @@ function draw_hud()
    end
 end
 
-function draw_ai_boats()
-   for boat in all(aiboats) do
-      pal(4,2,0)
-      draw_boat(boat)
-      
-      if boat.state == 0 and boat.hp < 1 then
-         local offsetx, offsety = 4*boat.scale, 3*boat.scale
-         local barx, bary = boat.x - offsetx, boat.y + offsety
-         local w,h = 8*boat.scale, 1*boat.scale
-         rectfill(barx, bary, barx + w, bary + h, 1)
-         if boat.hp > 0 then
-            local hpcol = boat.hp > 0.5 and 11 or 8
-            rectfill(barx, bary, barx + w*boat.hp, bary + h, hpcol)
-         end
-         --print("["..boat.aiID.."] "..boat.aistate, barx, bary+5)
-      end
-      pal(0)
-   end
-end
+-------------------------------------------------------------------------------
+-- collisions
 
 -- check if actor with pos x,y, displacement dx,dy and width/height w,h collides
 -- with given boat
-function check_collision_for_boat(actor, x, y, dx, dy, w, h, s, boat)
+function check_collision_for_boat(x, y, dx, dy, w, h, s, boat)
    local hw,hh, bhw, bhh = s*w*0.5, s*h*0.5, s*boat.w*0.5, s*boat.h*0.5
    local res = intersect(x-hw,y-hh,x+dx+hw,y+dy+hh, boat.x-bhw,boat.y-bhh,boat.x+bhw,boat.y+bhh)
    if should_debug_col then
@@ -409,7 +442,7 @@ function check_collision_for_boat(actor, x, y, dx, dy, w, h, s, boat)
       add(debug_coll, {x-hw,y-hh,x+dx+hw,y+dy+hh, color})
       add(debug_coll, {boat.x-bhw,boat.y-bhh,boat.x+bhw,boat.y+bhh, color})
    end
-   if res and boat.state ~= 1 then -- boat not sunk
+   if res and boat.state ~= 1 and boat.state ~= 2 then -- boat not sunk or kraken attack
       return boat
    end
    return false
@@ -420,16 +453,19 @@ function check_collisions(actor, x, y, dx, dy, w, h, s)
    s = s or 1 -- scale
    for b in all(aiboats) do
       if b ~= actor then
-         local col = check_collision_for_boat(actor, x, y, dx, dy, w, h, s, b)
+         local col = check_collision_for_boat(x, y, dx, dy, w, h, s, b)
          if (col) return col
       end
    end
-   if actor ~= p and check_collision_for_boat(actor, x, y, dx, dy, w, h, s, p) then
+   if actor ~= p and check_collision_for_boat(x, y, dx, dy, w, h, s, p) then
       return p
    else
       return false
    end
 end
+
+-------------------------------------------------------------------------------
+-- damage and damage effects
 
 function add_camshake(freqx, freqy, ampx, ampy, duration)
    camshake={dx=0, dy=0, t=0, freqx=freqx/30, freqy=freqy/30, ampx=ampx, ampy=ampy, lifetime=flr(duration*30)}
@@ -457,13 +493,16 @@ function apply_damage(boat, dmg, instigator)
    local isAI = boat.aistate ~= nil
    if boat.hp == 0 then
       boat.state = 1 -- sink boat
-      if (isAI) infamy += 0.25
+      if (isAI and instigator == p) infamy += 0.25
    elseif isAI then
       if boat.aistate ~= 1 and not should_flee(boat) then
          set_ai_state(boat, 1) -- go into combat
       end
    end
 end
+
+-------------------------------------------------------------------------------
+-- boarding
 
 function try_boarding()
    if (metervalue < 1) return
@@ -525,6 +564,9 @@ function draw_boarding()
       scaled_spr(spritenum, 64, 64, 2, 2, 6)
    end
 end
+
+-------------------------------------------------------------------------------
+-- cannonballs
 
 -- states: [0: inair] [1: splash] [2: hit]
 function make_cannonball(boat, side)
@@ -593,6 +635,47 @@ function draw_cannonballs_splash()
    end
 end
 
+-- krakens
+
+function make_kraken(x,y)
+   return {x=x, y=y, frame=0, state=0, t=0, target=nil} -- state 0: idle, 1: attack
+end
+
+function update_krakens()
+   for k in all(krakens) do
+      if k.state == 0 then
+         local col = check_collisions(k, k.x+4, k.y+4, 0, 0, 1, 1, 1)
+         if col and col.hp ~= nil and col.state == 0 then
+            k.state = 1 -- kraken attack
+            k.t = 0
+            k.frame = 0
+            k.target = col
+            col.state = 2 -- kraken attack
+            col.x, col.y = k.x+4, k.y+4
+         elseif k.t % 20 == 0 then
+            k.frame = (k.frame + 1) % #kraken_frames
+         end
+      elseif k.state == 1 then
+         if (k.t % 6) == 0 then
+            k.frame = k.frame + 1
+         end
+         if k.frame == #kraken_attack_frames then
+            apply_damage(k.target, k.target.hp, k)
+            k.state = 0 -- idle
+            k.frame = 0
+            k.t = 0
+         end
+      end
+      k.t += 1
+   end
+end
+
+function draw_krakens()
+   for k in all(krakens) do
+      local s = k.state == 0 and kraken_frames[k.frame+1] or kraken_attack_frames[k.frame+1]
+      spr(s, k.x, k.y)
+   end
+end
 
 -- water and wind effects
 
@@ -801,18 +884,18 @@ __gfx__
 000000000077700000aaa000000a0000000900000004000000000000000000000000000000050000000000000000500000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-60606060666066600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-66666060606060600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-06060060606066600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00040000cccccccccc8888cc0c0000c05c5555c50000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000c000000cc868888c00077000555775550000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000c004000cc888888800000000555555550000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-00000000c444444cc444444cc444444cc00044ec0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000000500555555005555005005000050050000500500005005000050050000500500005005000050050000500500000000000000000000000000
+000000000000000000505555005055550000000000050500000505000005050000050500007c777000ccccc00005050000000000000000000000000000000000
+000000000000000050555555005555550000000500000005000550050005500500077005007ccc5500c333c50000000500000005000000000000000000000000
+60606060666066605005555550055555500000005500005055500550555775505557c75055cc3c7055c333c05500005050000000000000000000000000000000
+66666060606060605555050055550500000000050000005500500055005777550057c755005c3c5500c333c50000005500000005000000000000000000000000
+060600606060666000550050005500505000000055000000550505005505050055077700557cccc055c333c05500000050000000000000000022225252522000
+000000000000000055505050555050050000000000050500000505000005050000050500007c777000ccccc00005050000000000000000000244244444444200
+00000000000000000000505550005505005005000050050000500500005005000050050000500500005005000050050000500500000000000244424444442420
+00040000cccccccccc8888cc0c0000c05c5555c50000000000000000000000000000000000000000000000000000000000000000000000000244424444442442
+00000000c000000cc868888c00077000555775550000000000000000000000000000000000000000000000000000000000000000000000000244424444442420
+00000000c004000cc888888800000000555555550000000000000000000000000000000000000000000000000000000000000000000000000244244444444200
+00000000c444444cc444444cc444444cc00044ec0000000000000000000000000000000000000000000000000000000000000000000000000022225252522000
 00000000c404404cc404404cc404404cc400404c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000c444444cc444444cce44444cce44444c0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 00000000c448844cc448844cc44884ecc448a4ec0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
@@ -996,4 +1079,5 @@ ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
 ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss
 
 __map__
-0103070008000900000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+01030700080009002e2f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+00000000000000003e3f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
