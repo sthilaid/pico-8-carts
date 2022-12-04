@@ -22,7 +22,7 @@ function _update()
 end
 
 function updatePlayerInputs()
-   local dv = 1
+   local dv = 2
    if (btn(0)) p.vx -= dv
    if (btn(1)) p.vx += dv
    if (btn(4)) updateJumpInput()
@@ -49,25 +49,43 @@ function intersect(x,y,w,h,flag)
    return false
 end
 
+function largerWithDir(a, b, dir)
+   if dir < 0 then
+      if (a < b) return a else return b
+    else
+       if (a > b) return a else return b
+    end
+end
+
 function move(dx,dy)
-   local safeX, safeY = p.x, safeY
+   local safeX, safeY = p.x, p.y
    local dirX, dirY = dx / abs(dx), dy / abs(dy)
+   local collisionReport = {false, false}
    for deltaX=0,abs(dx) do
       for deltaY=0,abs(dy) do
-         local x, y = p.x + dirX*deltaX, p.y + dirY*deltaY
-         local isColliding = intersect(x, y, p.w, p.h, 0)
-         if isColliding then
-            --stop()
-            p.x, p.y = safeX, safeY
-            return false
-         else
-            safeX, safeY = x, y
+         if not collisionReport[1] then
+            local x, y = largerWithDir(p.x + dirX*deltaX, safeX, dirX), safeY
+            local isColliding = intersect(x, y, p.w, p.h, 0)
+            if isColliding then
+               collisionReport[1] = true
+            else
+               safeX = x
+            end
+         end
+         if not collisionReport[2] then
+            x, y = safeX, largerWithDir(p.y + dirY*deltaY, safeY, dirY)
+            isColliding = intersect(x, y, p.w, p.h, 0)
+            if isColliding then
+               collisionReport[2] = true
+            else
+               safeY = y
+            end
          end
       end
    end
    p.x = safeX
    p.y = safeY
-   return true
+   return collisionReport
 end
 
 function detectGround()
@@ -75,14 +93,23 @@ function detectGround()
 end
 
 function movePlayer()
-   move(p.vx, p.vy)
+   local report = move(p.vx, p.vy)
+   local horizontalCollision, verticalCollision = report[1], report[2]
+   if horizontalCollision then
+      p.vx = 0
+   end
+   if verticalCollision then
+      p.vy = 0
+   end
    local onGround = detectGround()
    if onGround then
-      p.vy = 0
-      p.state = 0
+      if p.vy >= 0 then
+         p.vy = 0
+         p.state = 0
+      end
    else
-      p.vy += 1
       p.state = 1
+      p.vy += 1
    end
    p.vx = 0
 end
