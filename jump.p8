@@ -7,31 +7,82 @@ ground=119
 debug={}
 
 function _init()
-   p.x = 10
-   p.y = 10
+   setPosition(10, 10)
    p.vx = 0
    p.vy = 0
    p.w = 3
    p.h = 7
-   p.state = 0 -- 0: ground, 1: inair
+   p.leftoverDX = 0
+   p.leftoverDY = 0
+   p.momentum = 0
+   setState(0) -- 0: ground, 1: inair
+
+   poke(0X5F5C, 255) -- never repeat inputs
 end
 
 function _update()
    updatePlayerInputs()
    movePlayer()
+   if p.momentum > 0 and getTimeSinceMove() > 1.0 then
+      p.momentum = 0
+   end
+end
+
+function getSpeed()
+   if (p.momentum == 1) return 1.3
+   if (p.momentum == 2) return 1.5
+   if (p.momentum == 3) return 1.7
+   if (p.momentum == 4) return 2.1
+   return 1
+end
+
+function incMomentum()
+   p.momentum = min(p.momentum+1, 4)
 end
 
 function updatePlayerInputs()
-   local dv = 2
+   local dv = getSpeed()
    if (btn(0)) p.vx -= dv
    if (btn(1)) p.vx += dv
    if (btn(4)) updateJumpInput()
 end
 
+function setPosition(x, y)
+   if x ~= p.x or y ~= p.y then
+      p.x = x
+      p.y = y
+      p.lastMoveTime = time()
+   end
+end
+
+function getTimeSinceMove()
+   return time() - p.lastMoveTime
+end
+
+function setState(newState)
+   if newState ~= p.state then
+      p.state = newState
+      p.stateStartTime = time()
+   end
+end
+
+function getStateDuration()
+   return time() - p.stateStartTime
+end
+
+function canJump()
+   return p.state == 0 or (p.state == 1 and getStateDuration() < 0.1)
+end
+
 function updateJumpInput()
-   if p.state == 0 and btnp(4) then
-      p.vy -= 8
-      p.state = 1
+   if canJump() and btnp(4) then
+      p.vy -= 5
+      setState(1)
+      incMomentum()
+   else
+      if p.state == 1 and btn(4) and getStateDuration() < 0.3 then
+         p.vy -= 0.6
+      end
    end
 end
 
@@ -57,7 +108,9 @@ function largerWithDir(a, b, dir)
     end
 end
 
-function move(dx,dy)
+function move(requestedDX, requestedDY)
+   local fullDX,fullDY = requestedDX + p.leftoverDX, requestedDY + p.leftoverDY
+   local dx, dy = flr(fullDX), flr(fullDY)
    local safeX, safeY = p.x, p.y
    local dirX, dirY = dx / abs(dx), dy / abs(dy)
    local collisionReport = {false, false}
@@ -83,8 +136,9 @@ function move(dx,dy)
          end
       end
    end
-   p.x = safeX
-   p.y = safeY
+   setPosition(safeX, safeY)
+   p.leftoverDX = fullDX - dx
+   p.leftoverDY = fullDY - dy
    return collisionReport
 end
 
@@ -97,6 +151,7 @@ function movePlayer()
    local horizontalCollision, verticalCollision = report[1], report[2]
    if horizontalCollision then
       p.vx = 0
+      p.momentum = 0
    end
    if verticalCollision then
       p.vy = 0
@@ -105,10 +160,10 @@ function movePlayer()
    if onGround then
       if p.vy >= 0 then
          p.vy = 0
-         p.state = 0
+         setState(0)
       end
    else
-      p.state = 1
+      setState(1)
       p.vy += 1
    end
    p.vx = 0
@@ -120,7 +175,8 @@ function _draw()
    drawWorld()
    drawPlayer()
    camera()
-   print("p: {"..p.x..","..p.y.."} v: {"..p.vx..","..p.vy.."}")
+   print("p: {"..p.x..","..p.y.."} v: {"..p.vx..","..p.vy.."} idle: "..getTimeSinceMove())
+   print("m: "..p.momentum.." s: "..p.state.." ("..getStateDuration()..")")
 end
 
 function drawPlayer()
